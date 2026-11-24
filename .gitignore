@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+.cache/
+.env*
+.vite/
+vite.config.*.timestamp-*
+*.tsbuildinfo
+*-debug.log*
+logs/
+*.log
+.claude-replay.*
+.tmp-*
+
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Backend Python
+backend/.venv/
+backend/.env
+__pycache__/
+*.egg-info/
+.pytest_cache/
+!.env.example
