@@ -12,6 +12,7 @@ from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.api import ObservedWatch
 
 from nexora.db import Database
 from nexora.db import repositorio as repo
@@ -56,6 +57,7 @@ class VigilanteCarpetas:
         self._cola: asyncio.Queue[Path] = asyncio.Queue()
         self._temporizadores: dict[Path, asyncio.TimerHandle] = {}
         self._observador: Observer | None = None
+        self._vigiladas: dict[Path, ObservedWatch] = {}
         self._consumidor: asyncio.Task | None = None
         self._bucle: asyncio.AbstractEventLoop | None = None
 
@@ -63,17 +65,15 @@ class VigilanteCarpetas:
         self._bucle = asyncio.get_running_loop()
         with self.db.conectar() as con:
             carpetas = repo.carpetas_activas(con)
-        observador = Observer()
-        manejador = _Manejador(self._desde_hilo)
+            sin_terminar = repo.rutas_sin_terminar(con)
+        # Reintenta lo que quedó a medias o falló en la sesión anterior.
+        for ruta in sin_terminar:
+            self._cola.put_nowait(ruta)
+        self._observador = observador = Observer()
         for carpeta in carpetas:
             ruta = Path(carpeta["ruta"])
-            if ruta.is_dir():
-                observador.schedule(manejador, str(ruta), recursive=bool(carpeta["recursiva"]))
-                log.info("Vigilando %s", ruta)
-            else:
-                log.warning("La carpeta vigilada no existe: %s", ruta)
+            self.agregar(ruta, bool(carpeta["recursiva"]))
         observador.start()
-        self._observador = observador
         self._consumidor = asyncio.create_task(self._consumir(), name="nexora-watcher")
 
     async def detener(self) -> None:
@@ -88,6 +88,25 @@ class VigilanteCarpetas:
                 await self._consumidor
             except asyncio.CancelledError:
                 pass
+
+    def agregar(self, ruta: Path, recursiva: bool) -> None:
+        """Empieza a vigilar una carpeta sin reiniciar el motor."""
+        if self._observador is None:
+            return
+        self.quitar(ruta)
+        if not ruta.is_dir():
+            log.warning("La carpeta vigilada no existe: %s", ruta)
+            return
+        self._vigiladas[ruta] = self._observador.schedule(_Manejador(self._desde_hilo), str(ruta), recursive=recursiva)
+        log.info("Vigilando %s", ruta)
+
+    def quitar(self, ruta: Path) -> None:
+        vigilada = self._vigiladas.pop(ruta, None)
+        if vigilada and self._observador:
+            self._observador.unschedule(vigilada)
+
+    def encolar(self, ruta: Path) -> None:
+        self._cola.put_nowait(ruta)
 
     def _desde_hilo(self, ruta: str) -> None:
         if self._bucle:

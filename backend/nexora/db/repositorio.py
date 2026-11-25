@@ -67,6 +67,52 @@ def buscar_por_ruta(con: sqlite3.Connection, ruta: Path) -> Fila | None:
     return con.execute("SELECT * FROM archivos_indexados WHERE ruta_actual = ?", (str(ruta),)).fetchone()
 
 
+def ensenables(con: sqlite3.Connection) -> list[Fila]:
+    """Archivos que un motor en la nube ubicó por sí solo y el usuario no ha corregido."""
+    return con.execute(
+        """
+        SELECT id, categoria FROM archivos_indexados
+        WHERE estado = 'clasificado' AND origen_clasificacion = 'ia' AND categoria IS NOT NULL
+          AND modelo_llm IS NOT NULL AND modelo_llm NOT LIKE 'ollama:%'
+        """
+    ).fetchall()
+
+
+def liberar_ruta(con: sqlite3.Connection, ruta: Path, salvo_id: str) -> None:
+    """Olvida el registro de un archivo borrado a mano cuya ruta va a ocupar otro archivo."""
+    con.execute("DELETE FROM archivos_indexados WHERE ruta_actual = ? AND id <> ?", (str(ruta), salvo_id))
+
+
+def resumen(con: sqlite3.Connection) -> dict[str, Any]:
+    fila = con.execute(
+        """
+        SELECT COUNT(*) AS total,
+               COALESCE(SUM(date(clasificado_en, 'localtime') = date('now', 'localtime')), 0) AS clasificados_hoy,
+               COALESCE(SUM(date(clasificado_en, 'localtime') = date('now', 'localtime', '-1 day')), 0) AS clasificados_ayer,
+               COALESCE(SUM(estado = 'clasificado'), 0) AS aciertos,
+               COALESCE(SUM(estado = 'corregido'), 0) AS correcciones,
+               COALESCE(SUM(estado = 'pendiente'), 0) AS pendientes,
+               COALESCE(SUM(estado = 'error'), 0) AS errores,
+               COALESCE(SUM(estado = 'procesando'), 0) AS en_proceso
+        FROM archivos_indexados
+        """
+    ).fetchone()
+    datos = dict(fila)
+    aciertos, correcciones = datos.pop("aciertos"), datos.pop("correcciones")
+    decididos = aciertos + correcciones
+    datos["precision"] = round(100 * aciertos / decididos, 1) if decididos else None
+    return datos
+
+
+def actividad(con: sqlite3.Connection, limite: int) -> list[Fila]:
+    return con.execute("SELECT * FROM archivos_indexados ORDER BY actualizado_en DESC LIMIT ?", (limite,)).fetchall()
+
+
+def rutas_sin_terminar(con: sqlite3.Connection) -> list[Path]:
+    filas = con.execute("SELECT ruta_actual FROM archivos_indexados WHERE estado IN ('procesando', 'error')").fetchall()
+    return [Path(f["ruta_actual"]) for f in filas]
+
+
 def buscar_fts(con: sqlite3.Connection, consulta_fts: str, limite: int) -> list[Fila]:
     """Búsqueda de texto completo ordenada por relevancia BM25 (el nombre pesa más)."""
     if not consulta_fts:
@@ -148,16 +194,16 @@ def resolver_pendiente(con: sqlite3.Connection, pendiente_id: str) -> None:
 
 def insertar_feedback(
     con: sqlite3.Connection, archivo_id: str, carpeta_sugerida: str | None, carpeta_elegida: str,
-    confianza_original: float | None, fue_correccion: bool, dispositivo_id: str | None,
+    confianza_original: float | None, fue_correccion: bool, dispositivo_id: str | None, motivo: str = "",
 ) -> str:
     feedback_id = nuevo_id()
     con.execute(
         """
         INSERT INTO feedback_aprendizaje
-            (id, archivo_id, carpeta_sugerida, carpeta_elegida, confianza_original, fue_correccion, dispositivo_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, archivo_id, carpeta_sugerida, carpeta_elegida, confianza_original, fue_correccion, dispositivo_id, motivo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (feedback_id, archivo_id, carpeta_sugerida, carpeta_elegida, confianza_original, int(fue_correccion), dispositivo_id),
+        (feedback_id, archivo_id, carpeta_sugerida, carpeta_elegida, confianza_original, int(fue_correccion), dispositivo_id, motivo),
     )
     return feedback_id
 
@@ -249,6 +295,23 @@ def sembrar_carpetas(con: sqlite3.Connection, rutas: list[Path]) -> None:
 
 def carpetas_activas(con: sqlite3.Connection) -> list[Fila]:
     return con.execute("SELECT * FROM carpetas_vigiladas WHERE activa = 1").fetchall()
+
+
+def activar_carpeta(con: sqlite3.Connection, ruta: Path, recursiva: bool) -> str:
+    return con.execute(
+        """
+        INSERT INTO carpetas_vigiladas (id, ruta, recursiva) VALUES (?, ?, ?)
+        ON CONFLICT (ruta) DO UPDATE SET activa = 1, recursiva = excluded.recursiva RETURNING id
+        """,
+        (nuevo_id(), str(ruta), int(recursiva)),
+    ).fetchone()["id"]
+
+
+def desactivar_carpeta(con: sqlite3.Connection, carpeta_id: str) -> str | None:
+    fila = con.execute(
+        "UPDATE carpetas_vigiladas SET activa = 0 WHERE id = ? AND activa = 1 RETURNING ruta", (carpeta_id,)
+    ).fetchone()
+    return fila["ruta"] if fila else None
 
 
 def leer_ajuste(con: sqlite3.Connection, clave: str, por_defecto: str) -> str:

@@ -56,7 +56,7 @@ class AdaptadorAnthropic(AdaptadorLLM):
                 **extra,
             )
         except anthropic.RateLimitError as exc:
-            raise ErrorLLM("Límite de peticiones de Anthropic alcanzado.", reintentable=True) from exc
+            raise ErrorLLM("Límite de peticiones de Anthropic alcanzado.", reintentable=True, cuota=True) from exc
         except anthropic.AuthenticationError as exc:
             raise ErrorLLM("Credenciales de Anthropic no válidas (revisa ANTHROPIC_API_KEY).") from exc
         except anthropic.APIStatusError as exc:

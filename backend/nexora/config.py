@@ -33,12 +33,17 @@ class Settings(BaseSettings):
     # Formato en .env: NEXORA_CARPETAS_VIGILADAS='["C:/Users/yo/Downloads"]'
     carpetas_vigiladas: list[Path] = Field(default_factory=lambda: [Path.home() / "Downloads"])
     raiz_organizada: Path = Field(default_factory=lambda: Path.home() / "Nexora")
+    # Dónde buscar carpetas que el usuario ya tiene. Sin definir: Documentos, Escritorio, Descargas, Imágenes...
+    zonas_busqueda: list[Path] | None = None
     habilitar_watcher: bool = True
 
     # Motor de clasificación.
     umbral_confianza: float = Field(default=0.85, ge=0, le=1)
     llm_proveedor: ProveedorLLM = "anthropic"
     llm_modelo: str | None = None  # obligatorio salvo con anthropic (por defecto claude-opus-5-5)
+    # Motor que se usa cuando se agota la cuota del principal (p. ej. ollama + gemma3:4b).
+    llm_respaldo_proveedor: ProveedorLLM | None = None
+    llm_respaldo_modelo: str | None = None
     ollama_url: str = "http://localhost:11434"
     max_caracteres_clasificacion: int = 12_000
     max_caracteres_explicacion: int = 400_000

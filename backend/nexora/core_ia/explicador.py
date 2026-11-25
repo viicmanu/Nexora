@@ -43,16 +43,19 @@ class Explicador:
         texto = await asyncio.to_thread(extraer_texto, ruta, self.max_caracteres + 1)
         if not texto.strip():
             raise SinContenidoLegible(fila["nombre"])
-        truncado = len(texto) > self.max_caracteres
-        texto = texto[: self.max_caracteres]
 
-        respuesta = await self.llm.generar_texto(
-            prompts.SISTEMA_EXPLICACION,
-            prompts.prompt_explicacion(fila["nombre"], str(ruta), texto, pregunta, detallado, truncado),
-            max_tokens=16000 if detallado or pregunta else 4000,
-            esfuerzo="medio",
-        )
-        return Explicacion(fila, respuesta, self.llm.descripcion, len(texto), truncado)
+        async def con(llm: AdaptadorLLM) -> Explicacion:
+            limite = min(self.max_caracteres, llm.max_caracteres_explicacion or self.max_caracteres)
+            parte, truncado = texto[:limite], len(texto) > limite
+            respuesta = await llm.generar_texto(
+                prompts.SISTEMA_EXPLICACION,
+                prompts.prompt_explicacion(fila["nombre"], str(ruta), parte, pregunta, detallado, truncado),
+                max_tokens=16000 if detallado or pregunta else 4000,
+                esfuerzo="medio",
+            )
+            return Explicacion(fila, respuesta, llm.descripcion, len(parte), truncado)
+
+        return await self.llm.ejecutar(con)
 
     def _obtener(self, archivo_id: str) -> repo.Fila | None:
         with self.db.conectar() as con:

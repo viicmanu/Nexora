@@ -41,7 +41,7 @@ class AdaptadorOpenAI(AdaptadorLLM):
                 **opciones,
             )
         except self._openai.RateLimitError as exc:
-            raise ErrorLLM("Límite de peticiones de OpenAI alcanzado.", reintentable=True) from exc
+            raise ErrorLLM("Límite de peticiones de OpenAI alcanzado.", reintentable=True, cuota=True) from exc
         except self._openai.APIStatusError as exc:
             raise ErrorLLM(f"Error de la API de OpenAI ({exc.status_code}).", reintentable=exc.status_code >= 500) from exc
         except self._openai.APIConnectionError as exc:

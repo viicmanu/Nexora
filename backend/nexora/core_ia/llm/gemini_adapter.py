@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from nexora.core_ia.llm.base import AdaptadorLLM, ErrorLLM, Esfuerzo
+
+TIEMPO_LIMITE_MS = 60_000
+
+
+def _segundos_de_espera(exc: Exception) -> float | None:
+    """Gemini indica cuándo reintentar en RetryInfo ("retryDelay": "29389s")."""
+    encontrado = re.search(r"retryDelay\W+([\d.]+)s", str(exc))
+    return float(encontrado.group(1)) if encontrado else None
 
 
 class AdaptadorGemini(AdaptadorLLM):
@@ -19,7 +28,10 @@ class AdaptadorGemini(AdaptadorLLM):
             raise ErrorLLM('Falta el paquete google-genai: pip install "nexora-backend[gemini]"') from exc
         self._types = types
         self.modelo = modelo
-        self._cliente = genai.Client()
+        # Sin límite, un modelo saturado dejaría el watcher bloqueado indefinidamente.
+        self._cliente = genai.Client(
+            http_options=types.HttpOptions(timeout=TIEMPO_LIMITE_MS, retry_options=types.HttpRetryOptions(attempts=1))
+        )
 
     async def generar_json(self, sistema: str, prompt: str, esquema: dict[str, Any]) -> dict[str, Any]:
         config = self._types.GenerateContentConfig(
@@ -39,6 +51,11 @@ class AdaptadorGemini(AdaptadorLLM):
         try:
             respuesta = await self._cliente.aio.models.generate_content(model=self.modelo, contents=prompt, config=config)
         except Exception as exc:  # el SDK de Google no expone una jerarquía de errores estable entre versiones
+            if getattr(exc, "code", None) == 429:
+                raise ErrorLLM(
+                    f"Se agotó la cuota de Gemini para {self.modelo}. Espera a que se renueve o cambia de modelo.",
+                    reintentable=True, cuota=True, espera=_segundos_de_espera(exc),
+                ) from exc
             raise ErrorLLM(f"Error al consultar Gemini: {exc}", reintentable=True) from exc
         texto = (respuesta.text or "").strip()
         if not texto:

@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS feedback_aprendizaje (
     carpeta_elegida     TEXT NOT NULL,
     confianza_original  REAL,
     fue_correccion      INTEGER NOT NULL CHECK (fue_correccion IN (0, 1)),
+    motivo              TEXT,                       -- lo que escribió el usuario al corregir
     dispositivo_id      TEXT REFERENCES dispositivos_vinculados (id),
     creado_en           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

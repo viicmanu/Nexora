@@ -18,6 +18,9 @@ class Database:
         esquema = resources.files("nexora.db").joinpath("schema.sql").read_text(encoding="utf-8")
         with self.conectar() as con:
             con.executescript(esquema)
+            # Bases creadas antes de que existiera la columna.
+            if "motivo" not in {c["name"] for c in con.execute("PRAGMA table_info(feedback_aprendizaje)")}:
+                con.execute("ALTER TABLE feedback_aprendizaje ADD COLUMN motivo TEXT")
 
     @contextmanager
     def conectar(self) -> Iterator[sqlite3.Connection]:

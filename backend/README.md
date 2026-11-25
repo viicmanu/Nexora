@@ -67,7 +67,7 @@ backend/
 3. Se buscan en ChromaDB los ejemplos del usuario más parecidos y se envían al LLM junto con las carpetas existentes.
 4. El LLM devuelve carpeta, confianza, resumen ejecutivo, palabras clave y alternativas (JSON con esquema).
 5. Ajuste por aprendizaje: si los ejemplos del usuario coinciden, sube la confianza; si un ejemplo casi idéntico (similitud ≥ 0,92) dice otra carpeta, la baja a 0,60 para que decida el usuario.
-6. Si la confianza es ≥ `NEXORA_UMBRAL_CONFIANZA` (0,85), el archivo se mueve a `raiz_organizada/<carpeta>`; si no, queda en `/api/pending`.
+6. Si la confianza es ≥ `NEXORA_UMBRAL_CONFIANZA` (0,85) **y la carpeta ya existe** (en Documentos, Escritorio, Descargas, Imágenes, Música, Videos o la raíz de Nexora; configurable con `NEXORA_ZONAS_BUSQUEDA`), el archivo original se mueve allí. Si no, queda en `/api/pending`: las carpetas nuevas solo se crean si el usuario lo acepta.
 7. Se guarda en SQLite (ruta, resumen, palabras clave) y su embedding en ChromaDB.
 
 ## Esquema SQLite
@@ -105,9 +105,19 @@ El escritorio tiene todos los permisos. Un móvil emparejado solo tiene `files:s
 - El servidor escucha solo en `127.0.0.1`. En la Fase 2 el móvil entrará por un túnel o relay cifrado, no abriendo el puerto a la red.
 - Al arrancar se crea el token del escritorio en `%APPDATA%\Nexora\desktop.token`; la app Tauri lo lee y lo envía. En la base de datos solo se guarda su SHA-256.
 - `explain` solo lee rutas que ya están en el índice: el cliente envía un id, nunca una ruta.
-- Las carpetas del feedback se validan (sin `..`, rutas absolutas ni nombres reservados de Windows) y deben quedar dentro de la raíz organizada.
+- Las carpetas del feedback se validan (sin `..`, rutas absolutas ni nombres reservados de Windows) y quedan dentro de la raíz organizada, salvo que el usuario elija una carpeta propia (nunca la raíz del disco ni carpetas del sistema).
+- Al proveedor de IA se le envían los nombres de las carpetas del usuario (`Documentos/Universidad`), no sus rutas absolutas.
 - El contenido de los archivos se trata como dato en los prompts: el modelo tiene instrucciones de no obedecer órdenes que aparezcan en ellos.
 
 ## Proveedores de IA
 
 `NEXORA_LLM_PROVEEDOR` = `anthropic` (por defecto, modelo `claude-opus-5-5`), `openai`, `gemini` u `ollama` (local; no envía datos fuera del PC). Con los tres últimos, `NEXORA_LLM_MODELO` es obligatorio.
+
+Con `NEXORA_LLM_RESPALDO_PROVEEDOR` y `NEXORA_LLM_RESPALDO_MODELO`, al agotarse la cuota del principal se repite la operación con el respaldo y se vuelve a probar el principal con la siguiente petición cuando pasa el tiempo que indica el proveedor (15 minutos como máximo).
+
+## Aprendizaje
+
+- Cada archivo ubicado es un ejemplo en ChromaDB (`aprendizaje_ml`): de fuente `usuario` (confirmado o corregido) o `ia` (movido por el motor principal).
+- El motor de respaldo (Ollama) ve ambos; los de fuente `ia` solo le dan sugerencias y no le autorizan a mover. El principal solo ve los del usuario. La decisión del usuario reemplaza a la de la IA.
+- `POST /api/corrections` (`{"texto", "archivo_id"?}`) interpreta "X quedó mal, va en Y" y devuelve una propuesta; se aplica con `POST /api/feedback`, que guarda el texto en `motivo` para las siguientes clasificaciones.
+- Embeddings: `paraphrase-multilingual-MiniLM-L12-v2` local (~135 MB, se descarga una vez en `<datos>/modelos`). Si no se puede descargar, se usa el básico de ChromaDB.

@@ -78,6 +78,8 @@ class Pendiente(BaseModel):
     pendiente_id: str
     archivo: Archivo
     carpeta_sugerida: str
+    carpeta_etiqueta: str
+    carpeta_existe: bool = Field(description="False: la IA propone crearla y hay que preguntar al usuario.")
     confianza: float
     alternativas: list[str]
     razonamiento: str | None
@@ -86,7 +88,22 @@ class Pendiente(BaseModel):
 
 class SolicitudFeedback(BaseModel):
     archivo_id: str
-    carpeta_elegida: str = Field(min_length=1, max_length=260, examples=["Finanzas/Hogar"])
+    carpeta_elegida: str = Field(min_length=1, max_length=1000, examples=["Finanzas/Hogar"])
+    motivo: str = Field(default="", max_length=500, description="Explicación del usuario; la IA la tendrá en cuenta.")
+
+
+class SolicitudCorreccion(BaseModel):
+    texto: str = Field(min_length=3, max_length=500, examples=["La factura de agua debería estar en Hogar"])
+    archivo_id: str | None = None
+
+
+class PropuestaCorreccion(BaseModel):
+    archivo: Archivo | None = Field(description="None si no está claro de qué archivo habla.")
+    candidatos: list[Archivo]
+    carpeta: str | None = Field(description="None si no está claro dónde lo quiere.")
+    carpeta_etiqueta: str | None
+    carpeta_existe: bool
+    modelo: str
 
 
 class RespuestaFeedback(BaseModel):

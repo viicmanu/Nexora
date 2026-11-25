@@ -5,7 +5,7 @@ Aplicación de escritorio construida con **Tauri 2 + React 19**. El frontend usa
 ## Comandos
 
 - `pnpm install` — instala las dependencias de JavaScript.
-- `pnpm tauri:dev` — abre la app de escritorio con recarga en caliente (arranca Vite en el puerto 1420).
+- `pnpm tauri:dev` — abre la app con recarga en caliente y enciende el backend si está apagado (registro en `%APPDATA%/Nexora/motor.log`).
 - `pnpm tauri:build` — genera el instalador en `src-tauri/target/release/bundle/`.
 - `pnpm dev` — solo el frontend en el navegador (`http://localhost:1420`), sin APIs nativas.
 - `pnpm build` — verifica tipos y compila el frontend a `dist/`.
@@ -20,7 +20,8 @@ Aplicación de escritorio construida con **Tauri 2 + React 19**. El frontend usa
 ## Estructura
 
 - `src/main.tsx` — punto de entrada de React; importa `src/index.css` y monta `src/App.tsx`.
-- `src/App.tsx` — componente principal de la interfaz.
+- `src/App.tsx` — interfaz (Dashboard, Bandeja, Carpetas, Historial, Configuración).
+- `src/api.ts` — cliente de la API del backend.
 - `src/index.css` — estilos globales e importación de Tailwind CSS v4.
 - `index.html` — documento base con el `#root`.
 - `vite.config.ts` — Vite con React, Tailwind y los ajustes que Tauri necesita (puerto fijo 1420, alias `@` → `src`).
@@ -34,7 +35,7 @@ Aplicación de escritorio construida con **Tauri 2 + React 19**. El frontend usa
 
 ```ts
 import { invoke } from '@tauri-apps/api/core'
-const mensaje = await invoke<string>('greet', { name: 'Alex' })
+const token = await invoke<string>('token_escritorio')
 ```
 
 ## Estilos

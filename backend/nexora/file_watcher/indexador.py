@@ -8,7 +8,7 @@ import logging
 import mimetypes
 from pathlib import Path
 
-from nexora.core_ia.carpetas import mover_seguro, ruta_destino
+from nexora.core_ia.carpetas import destino_existe, mover_seguro, ruta_destino
 from nexora.core_ia.clasificador import Clasificador, ResultadoClasificacion
 from nexora.core_ia.extraccion import extraer_texto, representacion_para_embedding
 from nexora.core_ia.vector_store import AlmacenVectorial
@@ -44,7 +44,11 @@ class Indexador:
             return None
         hash_archivo = await asyncio.to_thread(calcular_hash, ruta)
         existente = await asyncio.to_thread(self._buscar_por_ruta, ruta)
-        if existente is not None and existente["hash_sha256"] == hash_archivo:
+        if (
+            existente is not None
+            and existente["hash_sha256"] == hash_archivo
+            and existente["estado"] not in ("procesando", "error")  # interrumpido o fallido: se reintenta
+        ):
             return existente["id"]  # ya indexado y sin cambios
 
         texto = await asyncio.to_thread(extraer_texto, ruta, self.max_caracteres)
@@ -65,8 +69,15 @@ class Indexador:
         documento = representacion_para_embedding(ruta.name, texto, resultado.resumen_ejecutivo, resultado.palabras_clave)
         await asyncio.to_thread(
             self.vectores.indexar_archivo, archivo_id, documento,
-            {"nombre": ruta.name, "categoria": resultado.carpeta_destino, "ruta_actual": str(ruta_final)},
+            {
+                "nombre": ruta.name, "categoria": resultado.carpeta_destino, "ruta_actual": str(ruta_final),
+                "base": representacion_para_embedding(ruta.name, texto),
+            },
         )
+        if resultado.ensena and ruta_final != ruta:
+            await asyncio.to_thread(
+                self.vectores.registrar_ejemplo, f"ia:{archivo_id}", archivo_id, resultado.carpeta_destino, False, "ia"
+            )
         return archivo_id
 
     # --- operaciones síncronas (se ejecutan en el threadpool) ---
@@ -100,11 +111,13 @@ class Indexador:
             resumen_ejecutivo=resultado.resumen_ejecutivo,
             palabras_clave=resultado.palabras_clave,
             confianza=resultado.confianza,
-            modelo_llm=self.clasificador.llm.descripcion,
+            modelo_llm=resultado.modelo,
         )
-        if resultado.confianza >= self.umbral:
+        # Sin intervención del usuario solo se usan carpetas que ya existen; una nueva siempre se consulta.
+        if resultado.confianza >= self.umbral and destino_existe(self.raiz, resultado.carpeta_destino):
             nueva_ruta = mover_seguro(ruta, ruta_destino(self.raiz, resultado.carpeta_destino))
             with self.db.conectar() as con:
+                repo.liberar_ruta(con, nueva_ruta, archivo_id)
                 repo.actualizar_archivo(
                     con, archivo_id, **comunes, ruta_actual=str(nueva_ruta), estado="clasificado",
                     origen_clasificacion="ia", clasificado_en=repo.ahora(),
