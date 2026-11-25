@@ -307,3 +307,5 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .propuesta { white-space: normal; }
 .propuesta p { margin: 0 0 4px; color: var(--text); font-size: 13px; }
 .propuesta p.ruta { color: var(--muted); font-size: 11px; }
+.indicar { margin-bottom: 17px; }
+.inactiva { opacity: .55; }

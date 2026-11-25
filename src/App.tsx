@@ -3,9 +3,10 @@ import {
   alSoltarArchivos, api, elegirArchivos, elegirCarpeta, encenderMotor, MotorApagado,
   type Ajustes, type Archivo, type Carpeta, type Destino, type Evento, type Pendiente, type Propuesta, type PruebaIA, type Resumen,
 } from './api'
+import { Indicaciones, NuevaIndicacion } from './Indicaciones'
 
 type Theme = 'light' | 'dark' | 'system'
-type Vista = 'dashboard' | 'inbox' | 'folder' | 'history' | 'settings'
+type Vista = 'dashboard' | 'inbox' | 'folder' | 'rules' | 'history' | 'settings'
 
 const icons: Record<string, ReactNode> = {
   dashboard: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -15,6 +16,7 @@ const icons: Record<string, ReactNode> = {
   settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></>,
   upload: <><path d="M12 16V3M7 8l5-5 5 5"/><path d="M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></>,
   chevron: <path d="m7 10 5 5 5-5"/>,
+  rules: <><path d="M4 5h16v11H9l-5 4Z"/><path d="M8 9h8M8 12h5"/></>,
   plus: <path d="M12 5v14M5 12h14"/>,
 }
 
@@ -32,6 +34,7 @@ const nav: [Vista, string][] = [
   ['dashboard', 'Dashboard'],
   ['inbox', 'Bandeja de Dudas'],
   ['folder', 'Carpetas Vigiladas'],
+  ['rules', 'Indicaciones'],
   ['history', 'Historial de Aprendizaje'],
   ['settings', 'Configuración'],
 ]
@@ -40,6 +43,7 @@ const subtitulos: Record<Vista, string> = {
   dashboard: 'Tu espacio digital está bajo control.',
   inbox: 'La IA necesita tu criterio para estos archivos.',
   folder: 'Nexora organiza los archivos nuevos que lleguen a estas carpetas.',
+  rules: 'Dile a la IA cómo quieres organizar tus archivos.',
   history: 'Busca tus archivos y pide a la IA que te los explique.',
   settings: 'Ajusta Nexora a tu manera.',
 }
@@ -188,6 +192,7 @@ function TarjetaDuda({ duda, destinos, resolver }: { duda: Pendiente; destinos: 
         <div className="file-title"><div><strong>{duda.archivo.nombre}</strong><p>{duda.archivo.resumen_ejecutivo}</p></div><span className="confidence">{Math.round(duda.confianza * 100)}% segura</span></div>
         {!duda.carpeta_existe && <p className="pregunta">No encontré una carpeta tuya para este archivo. ¿Dónde lo pongo?</p>}
         <div className="suggestion"><small>{duda.carpeta_existe ? 'TU CARPETA' : 'CARPETA NUEVA'}</small><strong title={duda.carpeta_sugerida}><Icon name="folder" size={15} /> {duda.carpeta_etiqueta}</strong></div>
+        {duda.razonamiento?.startsWith('Según tu indicación') && <p className="panel-description">{duda.razonamiento}</p>}
         {!duda.archivo.existe_en_disco && <p className="aviso-error">El archivo ya no está en su ubicación.</p>}
         <div className="file-actions">
           <button className="confirm" disabled={ocupado} onClick={() => elegir(duda.carpeta_sugerida)}>{ocupado ? 'Moviendo…' : duda.carpeta_existe ? 'Confirmar' : 'Crear y mover'}</button>
@@ -315,7 +320,7 @@ function Historial({ eventos, destinos, avisar, refrescar }: { eventos: Evento[]
               <div className="file-icon"><span>{tipoDe(a.nombre)}</span></div>
               <div>
                 <strong>{a.nombre}</strong>
-                <p>{etiquetas[a.estado]}{a.carpeta && (a.estado === 'clasificado' || a.estado === 'corregido') && ` · ${nombrar(a.carpeta, destinos)}`} · {haceCuanto(a.actualizado_en)}</p>
+                <p>{a.estado === 'clasificado' && !a.carpeta ? 'Se dejó en su sitio' : etiquetas[a.estado]}{a.carpeta && (a.estado === 'clasificado' || a.estado === 'corregido') && ` · ${nombrar(a.carpeta, destinos)}`} · {haceCuanto(a.actualizado_en)}</p>
                 <p className="ruta">{a.ruta_actual}{!a.existe_en_disco && ' (ya no está ahí)'}</p>
                 {a.error && <p className="aviso-error">{a.error}</p>}
               </div>
@@ -525,6 +530,9 @@ function App() {
   importarRef.current = importar
   useEffect(() => alSoltarArchivos(setDragging, (rutas) => { setVista('dashboard'); void importarRef.current(rutas) }), [])
 
+  const selectorCarpeta = (elegir: (c: string) => void, ocupado: boolean) =>
+    <SelectorCarpeta nombre="estos archivos" destinos={destinos} ocupado={ocupado} elegir={elegir} />
+
   const selectedTheme = themeOptions.find((option) => option.value === theme) ?? themeOptions[2]
   const hora = new Date().getHours()
   const saludo = hora < 12 ? 'Buenos días' : hora < 19 ? 'Buenas tardes' : 'Buenas noches'
@@ -626,6 +634,10 @@ function App() {
               </article>
             </section>
 
+            <article className="panel pagina indicar">
+              <div className="panel-heading"><h2>Enséñale a la IA</h2><button className="boton" onClick={() => setVista('rules')}>Ver indicaciones</button></div>
+              <NuevaIndicacion avisar={avisar} selector={selectorCarpeta} />
+            </article>
             <section className="dashboard-grid">
               <article className="panel doubts">
                 <div className="panel-heading">
@@ -657,7 +669,7 @@ function App() {
                       <div className="timeline-mark">{e.estado === 'error' ? '!' : e.estado === 'pendiente' ? '?' : e.estado === 'procesando' ? '…' : '✓'}</div>
                       <div className="event">
                         <div className="event-head"><strong>{e.nombre}</strong><time>{haceCuanto(e.actualizado_en)}</time></div>
-                        <div className="destination"><span>→</span><strong>{e.estado === 'clasificado' || e.estado === 'corregido' ? e.carpeta && nombrar(e.carpeta, destinos) : etiquetas[e.estado]}</strong></div>
+                        <div className="destination"><span>→</span><strong>{e.estado === 'clasificado' || e.estado === 'corregido' ? (e.carpeta ? nombrar(e.carpeta, destinos) : 'Se dejó en su sitio') : etiquetas[e.estado]}</strong></div>
                       </div>
                     </div>
                   ))}
@@ -674,6 +686,7 @@ function App() {
               <div className="file-list"><ListaDudas dudas={dudas} destinos={destinos} resolver={resolver} /></div>
             </article>
           )}
+          {vista === 'rules' && <Indicaciones key={String(conectado)} avisar={avisar} selector={selectorCarpeta} />}
           {vista === 'folder' && <Carpetas key={String(conectado)} avisar={avisar} />}
           {vista === 'history' && <Historial eventos={eventos} destinos={destinos} avisar={avisar} refrescar={refrescar} />}
           {vista === 'settings' && <Configuracion key={String(conectado)} nombre={nombre} setNombre={setNombre} theme={theme} cambiarTema={cambiarTema} avisar={avisar} />}

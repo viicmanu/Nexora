@@ -530,3 +530,74 @@ def test_migra_indice_y_la_decision_del_usuario_reemplaza_la_de_la_ia(tmp_path):
     assert almacen.registrar_ejemplo("ia:a", "a", "Uno", False, "ia")  # no pisa al usuario
     vecinos = almacen.vecinos_aprendizaje("x", 5)
     assert [(v.categoria, v.fuente, v.motivo) for v in vecinos] == [("Dos", "usuario", "va en Dos")]
+
+
+def test_indicaciones_del_usuario(entorno):
+    cliente, servicios, llm, entrada, tmp_path = entorno
+    hogar = tmp_path / "Documentos" / "Hogar"
+    hogar.mkdir(parents=True)
+    (tmp_path / "organizado" / "Finanzas").mkdir(parents=True)
+
+    def indexar(nombre, carpeta="Finanzas", confianza=0.95, indicacion=0):
+        ruta = entrada / nombre
+        ruta.write_text(nombre, encoding="utf-8")
+        llm.respuestas.append({**_respuesta_llm(carpeta, confianza), "indicacion": indicacion})
+        _indexar(servicios, ruta)
+        return ruta
+
+    # Interpretar no guarda nada.
+    llm.respuestas.append({"entendida": True, "resumen": "Los recibos van en Hogar.", "accion": "mover", "carpeta": "Documentos/Hogar"})
+    leida = cliente.post("/api/rules/interpret", json={"texto": "los recibos van en Hogar"}).json()
+    assert leida["carpeta_etiqueta"] == "Documentos/Hogar" and leida["carpeta_existe"]
+    assert cliente.get("/api/rules").json() == []
+
+    regla = cliente.post("/api/rules", json={
+        "texto": "los recibos van en Hogar", "resumen": leida["resumen"], "accion": "mover", "carpeta": leida["carpeta"],
+    }).json()
+    indexar("recibo.txt", indicacion=1)
+    assert "1. los recibos van en Hogar (Los recibos van en Hogar.) -> carpeta Documentos/Hogar" in llm.ultimo_prompt
+    assert (hogar / "recibo.txt").exists()
+    assert cliente.get("/api/rules").json()[0]["usos"] == 1
+
+    # No encaja, o número inventado: se clasifica normal.
+    indexar("a.txt", indicacion=0)
+    indexar("b.txt", indicacion=9)
+    assert (tmp_path / "organizado/Finanzas/a.txt").exists() and (tmp_path / "organizado/Finanzas/b.txt").exists()
+
+    # La indicación gana a un ejemplo previo contrario.
+    servicios.vectores.vecinos_aprendizaje = lambda c, n: [Vecino("x", "Finanzas", 0.97, "z.txt")]
+    indexar("recibo2.txt", indicacion=1)
+    assert (hogar / "recibo2.txt").exists()
+    servicios.vectores.vecinos_aprendizaje = lambda c, n: []
+
+    # En pausa no se envía.
+    cliente.patch(f"/api/rules/{regla['id']}", json={"activa": False})
+    indexar("recibo3.txt", indicacion=1)
+    assert "Indicaciones del usuario" not in llm.ultimo_prompt and not (hogar / "recibo3.txt").exists()
+
+    # no_mover: se queda; con un modelo pequeño, pregunta.
+    cliente.post("/api/rules", json={"texto": "no muevas instaladores", "accion": "no_mover"})
+    assert indexar("setup.txt", indicacion=1).exists()
+    fila = next(e for e in cliente.get("/api/activity").json() if e["nombre"] == "setup.txt")
+    assert fila["estado"] == "clasificado" and fila["carpeta"] is None
+    llm.ensena = False
+    llm.respuestas.append({"tipo": "instalador", "indicacion": 1})  # pregunta aparte para modelos pequeños
+    assert indexar("setup2.txt").exists()
+    llm.respuestas.append({"tipo": "otro", "indicacion": 0})
+    indexar("normal.txt", indicacion=1)
+    assert "Indicaciones del usuario" not in llm.ultimo_prompt and (tmp_path / "organizado/Finanzas/normal.txt").exists()
+    llm.ensena = True
+    cliente.post("/api/rules", json={"texto": "contratos: pregúntame", "accion": "preguntar"})
+    assert indexar("contrato.txt", indicacion=1).exists()
+    dudas = {d["archivo"]["nombre"]: d for d in cliente.get("/api/pending").json()}
+    assert set(dudas) == {"setup2.txt", "contrato.txt"} and "contratos: pregúntame" in dudas["contrato.txt"]["razonamiento"]
+
+    # Carpetas: nueva solo con permiso; nunca del sistema.
+    nueva = {"texto": "fotos a Album", "accion": "mover", "carpeta": "Album"}
+    assert cliente.post("/api/rules", json=nueva).status_code == 422
+    assert cliente.post("/api/rules", json={**nueva, "crear_carpeta": True}).status_code == 201
+    assert (tmp_path / "organizado" / "Album").is_dir()
+    assert cliente.post("/api/rules", json={**nueva, "carpeta": "C:/Windows", "crear_carpeta": True}).status_code == 422
+    assert cliente.post("/api/rules", json={"texto": "sin carpeta", "accion": "mover"}).status_code == 422
+    assert cliente.delete(f"/api/rules/{regla['id']}").status_code == 204
+    assert cliente.delete(f"/api/rules/{regla['id']}").status_code == 404

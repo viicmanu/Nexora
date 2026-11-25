@@ -73,7 +73,12 @@ def construir_servicios(
     llm = llm or crear_adaptador(settings)
 
     buscador_carpetas = BuscadorCarpetas(settings.raiz_organizada, settings.zonas_busqueda)
-    clasificador = Clasificador(llm, vectores, buscador_carpetas)
+
+    def obtener_indicaciones() -> list[repo.Fila]:
+        with db.conectar() as con:
+            return repo.indicaciones_activas(con)
+
+    clasificador = Clasificador(llm, vectores, buscador_carpetas, obtener_indicaciones)
     indexador = Indexador(
         db, vectores, clasificador, settings.raiz_organizada, umbral, settings.max_caracteres_clasificacion
     )

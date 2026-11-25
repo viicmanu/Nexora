@@ -7,6 +7,7 @@ import logging
 import re
 import unicodedata
 from collections import defaultdict
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -35,40 +36,54 @@ class ResultadoClasificacion(BaseModel):
     razonamiento: str = ""
     modelo: str = ""  # motor que respondió
     ensena: bool = False
+    indicacion_id: str | None = None
+    accion: str = ""  # la de la indicación aplicada
 
 
 class Clasificador:
-    def __init__(self, llm: AdaptadorLLM, vectores: AlmacenVectorial, buscador: BuscadorCarpetas) -> None:
+    def __init__(
+        self, llm: AdaptadorLLM, vectores: AlmacenVectorial, buscador: BuscadorCarpetas,
+        obtener_indicaciones: Callable[[], Sequence[Mapping]] = list,
+    ) -> None:
         self.llm = llm
         self.vectores = vectores
         self.buscador = buscador
+        self.obtener_indicaciones = obtener_indicaciones
 
     async def clasificar(self, nombre: str, extension: str, texto: str) -> ResultadoClasificacion:
         consulta = representacion_para_embedding(nombre, texto)
-        vecinos, catalogo = await asyncio.gather(
+        vecinos, catalogo, indicaciones = await asyncio.gather(
             asyncio.to_thread(self.vectores.vecinos_aprendizaje, consulta, 5),
             asyncio.to_thread(self.buscador.catalogo),
+            asyncio.to_thread(self.obtener_indicaciones),
         )
         return await self.llm.ejecutar(
-            lambda llm: self._clasificar_con(llm, nombre, extension, texto, catalogo, vecinos)
+            lambda llm: self._clasificar_con(llm, nombre, extension, texto, catalogo, vecinos, indicaciones)
         )
 
     async def _clasificar_con(
-        self, llm: AdaptadorLLM, nombre: str, extension: str, texto: str, catalogo: Catalogo, vecinos: list[Vecino]
+        self, llm: AdaptadorLLM, nombre: str, extension: str, texto: str, catalogo: Catalogo, vecinos: list[Vecino],
+        indicaciones: Sequence[Mapping],
     ) -> ResultadoClasificacion:
         # El motor principal no necesita sus propios ejemplos; el de respaldo aprende de ellos.
         propios = [v for v in vecinos if v.fuente == "usuario"]
         vecinos = propios if llm.ensena else propios + [v for v in vecinos if v.fuente == "ia"]
         limite = llm.max_caracteres_clasificacion
         texto = texto[:limite] if limite else texto
+        aplicable: Mapping | None = None
+        if indicaciones and not llm.ensena:
+            # Un modelo pequeño tiende a aplicar indicaciones a todo si las lee junto al resto: se pregunta aparte.
+            aplicable = await _elegir_indicacion(llm, nombre, texto, indicaciones)
+            indicaciones = [aplicable] if aplicable else []
         etiquetas = catalogo.etiquetas
         if llm.max_carpetas and len(etiquetas) > llm.max_carpetas:
             etiquetas = await asyncio.to_thread(self.preseleccionar, llm.max_carpetas, nombre, texto, catalogo, vecinos)
         datos = await llm.generar_json(
             prompts.SISTEMA_CLASIFICACION,
-            prompts.prompt_clasificacion(nombre, extension, texto, catalogo, etiquetas, vecinos),
+            prompts.prompt_clasificacion(nombre, extension, texto, catalogo, etiquetas, vecinos, indicaciones),
             prompts.ESQUEMA_CLASIFICACION,
         )
+        numero = datos.pop("indicacion", 0)
         datos["confianza"] = min(max(float(datos.get("confianza", 0)), 0.0), llm.confianza_maxima)
         try:
             resultado = ResultadoClasificacion.model_validate(datos)
@@ -76,6 +91,11 @@ class Clasificador:
             log.warning("Respuesta del LLM con formato inesperado para %s: %s", nombre, datos)
             raise
         resultado = _normalizar(resultado, catalogo).model_copy(update={"modelo": llm.descripcion, "ensena": llm.ensena})
+        if llm.ensena and isinstance(numero, int) and 1 <= numero <= len(indicaciones):
+            aplicable = indicaciones[numero - 1]
+        if aplicable:
+            # Una indicación expresa manda sobre los ejemplos previos.
+            return aplicar_indicacion(resultado, aplicable, llm.ensena)
         return ajustar_con_aprendizaje(resultado, vecinos)
 
     def preseleccionar(self, n: int, nombre: str, texto: str, catalogo: Catalogo, vecinos: list[Vecino]) -> list[str]:
@@ -116,6 +136,30 @@ def _normalizar(resultado: ResultadoClasificacion, catalogo: Catalogo) -> Result
     except CarpetaInvalida:
         # Carpeta inutilizable: se manda a la bandeja de dudas en lugar de moverlo a ciegas.
         cambios |= {"carpeta_destino": CARPETA_SIN_CLASIFICAR, "confianza": 0.0}
+    return resultado.model_copy(update=cambios)
+
+
+async def _elegir_indicacion(
+    llm: AdaptadorLLM, nombre: str, texto: str, indicaciones: Sequence[Mapping]
+) -> Mapping | None:
+    datos = await llm.generar_json(
+        prompts.SISTEMA_INDICACION, prompts.prompt_indicacion(nombre, texto[:800], indicaciones), prompts.ESQUEMA_INDICACION
+    )
+    numero = datos.get("indicacion")
+    return indicaciones[numero - 1] if isinstance(numero, int) and 1 <= numero <= len(indicaciones) else None
+
+
+def aplicar_indicacion(resultado: ResultadoClasificacion, indicacion: Mapping, fiable: bool) -> ResultadoClasificacion:
+    accion = indicacion["accion"]
+    if accion == "no_mover" and not fiable:
+        accion = "preguntar"  # un modelo pequeño puede equivocarse de indicación: que lo confirme el usuario
+    cambios = {
+        "indicacion_id": indicacion["id"], "accion": accion,
+        "razonamiento": f"Según tu indicación: «{indicacion['texto']}»",
+    }
+    if indicacion["carpeta"]:
+        otras = [a for a in (resultado.carpeta_destino, *resultado.alternativas) if a.casefold() != indicacion["carpeta"].casefold()]
+        cambios |= {"carpeta_destino": indicacion["carpeta"], "alternativas": list(dict.fromkeys(otras))[:3]}
     return resultado.model_copy(update=cambios)
 
 

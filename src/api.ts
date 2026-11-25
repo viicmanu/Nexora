@@ -49,6 +49,16 @@ export interface Propuesta {
   carpeta_existe: boolean
   modelo: string
 }
+export interface Interpretacion {
+  entendida: boolean
+  resumen: string
+  accion: 'mover' | 'preguntar' | 'no_mover' | 'guia'
+  carpeta: string | null
+  carpeta_etiqueta: string | null
+  carpeta_existe: boolean
+  modelo: string
+}
+export interface Indicacion extends Omit<Interpretacion, 'entendida' | 'modelo'> { id: string; texto: string; activa: boolean; usos: number }
 export interface Destino { valor: string; etiqueta: string }
 export interface Carpeta { id: string; ruta: string; recursiva: boolean; existe: boolean }
 export interface Ajustes { llm: string; respaldo: string | null; umbral_confianza: number; raiz_organizada: string; zonas_busqueda: string[] }
@@ -104,6 +114,12 @@ export const api = {
   actividad: (limite = 100) => pedir<Evento[]>(`/activity?limite=${limite}`),
   pendientes: () => pedir<Pendiente[]>('/pending?limite=200'),
   destinos: () => pedir<Destino[]>('/destinations'),
+  indicaciones: () => pedir<Indicacion[]>('/rules'),
+  interpretarIndicacion: (texto: string) => pedir<Interpretacion>('/rules/interpret', json('POST', { texto })),
+  guardarIndicacion: (datos: { texto: string; resumen: string; accion: Indicacion['accion']; carpeta: string | null; crear_carpeta: boolean }) =>
+    pedir<Indicacion>('/rules', json('POST', datos)),
+  activarIndicacion: (id: string, activa: boolean) => pedir<Indicacion>(`/rules/${id}`, json('PATCH', { activa })),
+  borrarIndicacion: (id: string) => pedir<void>(`/rules/${id}`, { method: 'DELETE' }),
   carpetas: () => pedir<Carpeta[]>('/folders'),
   agregarCarpeta: (ruta: string, recursiva: boolean) => pedir<Carpeta>('/folders', json('POST', { ruta, recursiva })),
   quitarCarpeta: (id: string) => pedir<void>(`/folders/${id}`, { method: 'DELETE' }),

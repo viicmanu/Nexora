@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS carpetas_vigiladas (
     creado_en  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Indicaciones permanentes del usuario ("los recibos van en Hogar").
+CREATE TABLE IF NOT EXISTS indicaciones (
+    num        INTEGER PRIMARY KEY AUTOINCREMENT,
+    id         TEXT NOT NULL UNIQUE,
+    texto      TEXT NOT NULL,                    -- lo que escribió el usuario
+    resumen    TEXT NOT NULL,                    -- cómo lo entendió la IA, confirmado por el usuario
+    accion     TEXT NOT NULL CHECK (accion IN ('mover', 'preguntar', 'no_mover', 'guia')),
+    carpeta    TEXT,                             -- solo con 'mover'
+    activa     INTEGER NOT NULL DEFAULT 1 CHECK (activa IN (0, 1)),
+    usos       INTEGER NOT NULL DEFAULT 0,
+    creado_en  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE TABLE IF NOT EXISTS ajustes (
     clave           TEXT PRIMARY KEY,
     valor           TEXT NOT NULL,

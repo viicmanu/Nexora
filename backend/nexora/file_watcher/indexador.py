@@ -113,8 +113,19 @@ class Indexador:
             confianza=resultado.confianza,
             modelo_llm=resultado.modelo,
         )
+        if resultado.indicacion_id:
+            with self.db.conectar() as con:
+                repo.contar_uso_indicacion(con, resultado.indicacion_id)
+        if resultado.accion == "no_mover":
+            with self.db.conectar() as con:
+                repo.actualizar_archivo(
+                    con, archivo_id, **{**comunes, "categoria": None}, estado="clasificado", origen_clasificacion="usuario"
+                )
+            log.info("%s se deja en su sitio por indicación del usuario", ruta.name)
+            return ruta
         # Sin intervención del usuario solo se usan carpetas que ya existen; una nueva siempre se consulta.
-        if resultado.confianza >= self.umbral and destino_existe(self.raiz, resultado.carpeta_destino):
+        decidido = resultado.confianza >= self.umbral and resultado.accion != "preguntar"
+        if decidido and destino_existe(self.raiz, resultado.carpeta_destino):
             nueva_ruta = mover_seguro(ruta, ruta_destino(self.raiz, resultado.carpeta_destino))
             with self.db.conectar() as con:
                 repo.liberar_ruta(con, nueva_ruta, archivo_id)

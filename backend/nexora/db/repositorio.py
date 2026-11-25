@@ -314,6 +314,38 @@ def desactivar_carpeta(con: sqlite3.Connection, carpeta_id: str) -> str | None:
     return fila["ruta"] if fila else None
 
 
+MAX_INDICACIONES = 40
+
+
+def listar_indicaciones(con: sqlite3.Connection) -> list[Fila]:
+    return con.execute("SELECT * FROM indicaciones ORDER BY num DESC").fetchall()
+
+
+def indicaciones_activas(con: sqlite3.Connection) -> list[Fila]:
+    return con.execute("SELECT * FROM indicaciones WHERE activa = 1 ORDER BY num DESC").fetchall()
+
+
+def crear_indicacion(con: sqlite3.Connection, texto: str, resumen: str, accion: str, carpeta: str | None) -> Fila:
+    return con.execute(
+        "INSERT INTO indicaciones (id, texto, resumen, accion, carpeta) VALUES (?, ?, ?, ?, ?) RETURNING *",
+        (nuevo_id(), texto, resumen, accion, carpeta),
+    ).fetchone()
+
+
+def activar_indicacion(con: sqlite3.Connection, indicacion_id: str, activa: bool) -> Fila | None:
+    return con.execute(
+        "UPDATE indicaciones SET activa = ? WHERE id = ? RETURNING *", (int(activa), indicacion_id)
+    ).fetchone()
+
+
+def borrar_indicacion(con: sqlite3.Connection, indicacion_id: str) -> bool:
+    return con.execute("DELETE FROM indicaciones WHERE id = ?", (indicacion_id,)).rowcount > 0
+
+
+def contar_uso_indicacion(con: sqlite3.Connection, indicacion_id: str) -> None:
+    con.execute("UPDATE indicaciones SET usos = usos + 1 WHERE id = ?", (indicacion_id,))
+
+
 def leer_ajuste(con: sqlite3.Connection, clave: str, por_defecto: str) -> str:
     fila = con.execute("SELECT valor FROM ajustes WHERE clave = ?", (clave,)).fetchone()
     return fila["valor"] if fila else por_defecto

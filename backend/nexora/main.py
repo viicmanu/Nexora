@@ -52,7 +52,7 @@ def create_app(settings: Settings | None = None, fabrica: Callable[[Settings], S
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origenes,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "X-API-Key", "Content-Type"],
     )
 
