@@ -22,6 +22,25 @@ from nexora.servicios import Servicios
 router = APIRouter(prefix="/api", tags=["aprendizaje"])
 
 
+def a_pendiente(f: repo.Fila, catalogo, servicios: Servicios) -> Pendiente:
+    original = None
+    if f["duplicado_de"]:
+        with servicios.db.conectar() as con:
+            original = repo.obtener_archivo(con, f["duplicado_de"])
+    return Pendiente(
+        pendiente_id=f["pendiente_id"],
+        archivo=Archivo.desde_fila(f),
+        carpeta_sugerida=f["carpeta_sugerida"],
+        carpeta_etiqueta=catalogo.etiqueta(f["carpeta_sugerida"]) if f["carpeta_sugerida"] else "",
+        duplicado_de=Archivo.desde_fila(original) if original else None,
+        carpeta_existe=bool(f["carpeta_sugerida"]) and destino_existe(servicios.settings.raiz_organizada, f["carpeta_sugerida"]),
+        confianza=f["confianza_sugerencia"],
+        alternativas=json.loads(f["alternativas"] or "[]"),
+        razonamiento=f["razonamiento"],
+        creado_en=f["pendiente_creado_en"],
+    )
+
+
 @router.get("/pending", response_model=list[Pendiente], dependencies=[Depends(requiere(ORGANIZAR))])
 async def listar_pendientes(
     limite: int = Query(50, ge=1, le=200), servicios: Servicios = Depends(obtener_servicios)
@@ -35,20 +54,7 @@ async def listar_pendientes(
     filas, catalogo = await asyncio.gather(
         asyncio.to_thread(consultar), asyncio.to_thread(servicios.carpetas.catalogo)
     )
-    return [
-        Pendiente(
-            pendiente_id=f["pendiente_id"],
-            archivo=Archivo.desde_fila(f),
-            carpeta_sugerida=f["carpeta_sugerida"],
-            carpeta_etiqueta=catalogo.etiqueta(f["carpeta_sugerida"]),
-            carpeta_existe=destino_existe(servicios.settings.raiz_organizada, f["carpeta_sugerida"]),
-            confianza=f["confianza_sugerencia"],
-            alternativas=json.loads(f["alternativas"] or "[]"),
-            razonamiento=f["razonamiento"],
-            creado_en=f["pendiente_creado_en"],
-        )
-        for f in filas
-    ]
+    return await asyncio.to_thread(lambda: [a_pendiente(f, catalogo, servicios) for f in filas])
 
 
 @router.post("/corrections", response_model=PropuestaCorreccion, dependencies=[Depends(requiere(ORGANIZAR))])

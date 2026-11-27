@@ -79,6 +79,7 @@ class Pendiente(BaseModel):
     archivo: Archivo
     carpeta_sugerida: str
     carpeta_etiqueta: str
+    duplicado_de: Archivo | None = Field(default=None, description="Original del que es copia exacta.")
     carpeta_existe: bool = Field(description="False: la IA propone crearla y hay que preguntar al usuario.")
     confianza: float
     alternativas: list[str]

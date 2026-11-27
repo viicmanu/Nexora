@@ -35,6 +35,7 @@ class AlmacenVectorial(Protocol):
     def indexar_archivo(self, archivo_id: str, documento: str, metadatos: dict[str, Any]) -> None: ...
     def similitudes(self, consulta: str, textos: list[str]) -> list[float]: ...
     def buscar_archivos(self, consulta: str, n: int) -> list[tuple[str, float]]: ...
+    def olvidar_ejemplos(self, archivo_id: str) -> None: ...
     def vecinos_aprendizaje(self, consulta: str, n: int) -> list[Vecino]: ...
     def registrar_ejemplo(
         self, ejemplo_id: str, archivo_id: str, categoria: str, fue_correccion: bool,
@@ -128,6 +129,9 @@ class AlmacenChroma:
                 for i, d, m in zip(res["ids"][0], res["distances"][0], res["metadatas"][0])
             ]
         return vecinos
+
+    def olvidar_ejemplos(self, archivo_id: str) -> None:
+        self._aprendizaje.delete(where={"archivo_id": archivo_id})
 
     def registrar_ejemplo(
         self, ejemplo_id: str, archivo_id: str, categoria: str, fue_correccion: bool,

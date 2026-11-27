@@ -18,13 +18,14 @@ export interface Archivo {
   existe_en_disco: boolean
   actualizado_en: string
 }
-export interface Evento extends Archivo { error: string | null; origen: 'ia' | 'usuario' | null }
+export interface Evento extends Archivo { error: string | null; origen: 'ia' | 'usuario' | null; se_puede_deshacer: boolean }
 export interface Pendiente {
   pendiente_id: string
   archivo: Archivo
   carpeta_sugerida: string
   carpeta_etiqueta: string
   carpeta_existe: boolean
+  duplicado_de: Archivo | null
   confianza: number
   alternativas: string[]
   razonamiento: string | null
@@ -39,6 +40,7 @@ export interface Resumen {
   total: number
   motor_ia: string
   usando_respaldo: boolean
+  motivo_respaldo: '' | 'cuota' | 'caida'
   vuelve_en: number
 }
 export interface Propuesta {
@@ -59,6 +61,17 @@ export interface Interpretacion {
   modelo: string
 }
 export interface Indicacion extends Omit<Interpretacion, 'entendida' | 'modelo'> { id: string; texto: string; activa: boolean; usos: number }
+export interface EstadoOrganizar {
+  activa: boolean
+  carpeta: string | null
+  total: number
+  hechos: number
+  restantes: number
+  estado: '' | 'lista' | 'analizando' | 'revisar' | 'terminada'
+  lote: Pendiente[]
+  resueltos: Archivo[]
+  error: string
+}
 export interface Destino { valor: string; etiqueta: string }
 export interface Carpeta { id: string; ruta: string; recursiva: boolean; existe: boolean }
 export interface Ajustes { llm: string; respaldo: string | null; umbral_confianza: number; raiz_organizada: string; zonas_busqueda: string[] }
@@ -126,6 +139,13 @@ export const api = {
   proponerCorreccion: (texto: string, archivo_id: string | null) => pedir<Propuesta>('/corrections', json('POST', { texto, archivo_id })),
   decidir: (archivo_id: string, carpeta_elegida: string, motivo = '') =>
     pedir<{ carpeta_elegida: string; aprendizaje_registrado: boolean }>('/feedback', json('POST', { archivo_id, carpeta_elegida, motivo })),
+  deshacer: (id: string) => pedir<Archivo>(`/files/${id}/undo`, { method: 'POST' }),
+  aPapelera: (id: string) => pedir<void>(`/files/${id}/trash`, { method: 'POST' }),
+  estadoOrganizar: () => pedir<EstadoOrganizar>('/organize'),
+  prepararOrganizar: (ruta: string, recursiva: boolean) => pedir<EstadoOrganizar>('/organize', json('POST', { ruta, recursiva })),
+  siguienteOrganizar: () => pedir<EstadoOrganizar>('/organize/next', { method: 'POST' }),
+  aprobarOrganizar: (aprobados: Record<string, string>) => pedir<EstadoOrganizar>('/organize/approve', json('POST', { aprobados })),
+  cancelarOrganizar: () => pedir<void>('/organize', { method: 'DELETE' }),
   reintentar: (id: string) => pedir<unknown>(`/files/${id}/retry`, { method: 'POST' }),
   importar: (rutas: string[]) => pedir<{ aceptados: string[]; omitidos: string[] }>('/files/import', json('POST', { rutas })),
   buscar: (q: string) => pedir<{ resultados: { archivo: Archivo }[] }>(`/files/search?limite=20&q=${encodeURIComponent(q)}`),

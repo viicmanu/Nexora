@@ -11,6 +11,7 @@ from nexora.core_ia.busqueda import BuscadorHibrido
 from nexora.core_ia.catalogo import BuscadorCarpetas
 from nexora.core_ia.clasificador import Clasificador
 from nexora.core_ia.correccion import InterpreteCorrecciones
+from nexora.core_ia.deshacer import ServicioDeshacer
 from nexora.core_ia.embeddings import EmbeddingsMultilingues
 from nexora.core_ia.explicador import Explicador
 from nexora.core_ia.llm import AdaptadorLLM, crear_adaptador
@@ -18,6 +19,7 @@ from nexora.core_ia.vector_store import AlmacenChroma, AlmacenVectorial
 from nexora.db import Database
 from nexora.db import repositorio as repo
 from nexora.file_watcher.indexador import Indexador
+from nexora.file_watcher.organizador import Organizador
 from nexora.file_watcher.watcher import VigilanteCarpetas
 
 log = logging.getLogger(__name__)
@@ -55,6 +57,8 @@ class Servicios:
     explicador: Explicador
     carpetas: BuscadorCarpetas
     correcciones: InterpreteCorrecciones
+    deshacer: ServicioDeshacer
+    organizador: Organizador
     aprendizaje: ServicioAprendizaje
     vigilante: VigilanteCarpetas
 
@@ -83,6 +87,7 @@ def construir_servicios(
         db, vectores, clasificador, settings.raiz_organizada, umbral, settings.max_caracteres_clasificacion
     )
     buscador = BuscadorHibrido(db, vectores)
+    aprendizaje = ServicioAprendizaje(db, vectores, settings.raiz_organizada)
     _ensenar_anteriores(db, vectores)
     return Servicios(
         settings=settings,
@@ -93,8 +98,10 @@ def construir_servicios(
         indexador=indexador,
         buscador=buscador,
         correcciones=InterpreteCorrecciones(db, buscador, clasificador),
+        deshacer=ServicioDeshacer(db, vectores),
+        organizador=Organizador(db, indexador, aprendizaje, settings.raiz_organizada),
         carpetas=buscador_carpetas,
         explicador=Explicador(db, llm, settings.max_caracteres_explicacion),
-        aprendizaje=ServicioAprendizaje(db, vectores, settings.raiz_organizada),
+        aprendizaje=aprendizaje,
         vigilante=VigilanteCarpetas(db, indexador, settings.raiz_organizada),
     )

@@ -56,7 +56,10 @@ class AdaptadorGemini(AdaptadorLLM):
                     f"Se agotó la cuota de Gemini para {self.modelo}. Espera a que se renueve o cambia de modelo.",
                     reintentable=True, cuota=True, espera=_segundos_de_espera(exc),
                 ) from exc
-            raise ErrorLLM(f"Error al consultar Gemini: {exc}", reintentable=True) from exc
+            codigo = getattr(exc, "code", None)
+            # 400/401/403/404: clave o modelo mal configurados; reintentar o cambiar de motor no lo arregla.
+            reintentable = not (isinstance(codigo, int) and 400 <= codigo < 500)
+            raise ErrorLLM(f"Error al consultar Gemini: {exc}", reintentable=reintentable) from exc
         texto = (respuesta.text or "").strip()
         if not texto:
             raise ErrorLLM("Gemini devolvió una respuesta vacía.", reintentable=True)

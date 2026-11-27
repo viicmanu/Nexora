@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS carpetas_vigiladas (
     creado_en  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Movimientos hechos por Nexora (para poder deshacerlos).
+CREATE TABLE IF NOT EXISTS movimientos (
+    id                  TEXT PRIMARY KEY,
+    archivo_id          TEXT NOT NULL REFERENCES archivos_indexados (id) ON DELETE CASCADE,
+    origen              TEXT NOT NULL,
+    destino             TEXT NOT NULL,
+    categoria_anterior  TEXT,
+    autor               TEXT NOT NULL CHECK (autor IN ('ia', 'usuario')),
+    creado_en           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    deshecho_en         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_movimientos_archivo ON movimientos (archivo_id);
+
 -- Indicaciones permanentes del usuario ("los recibos van en Hogar").
 CREATE TABLE IF NOT EXISTS indicaciones (
     num        INTEGER PRIMARY KEY AUTOINCREMENT,

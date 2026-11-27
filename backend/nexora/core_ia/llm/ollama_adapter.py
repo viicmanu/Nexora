@@ -51,7 +51,8 @@ class AdaptadorOllama(AdaptadorLLM):
         except httpx.ConnectError as exc:
             raise ErrorLLM("Ollama no está en ejecución (ollama serve).", reintentable=True) from exc
         except httpx.HTTPStatusError as exc:
-            raise ErrorLLM(f"Ollama respondió {exc.response.status_code}: {exc.response.text[:200]}") from exc
+            codigo = exc.response.status_code
+            raise ErrorLLM(f"Ollama respondió {codigo}: {exc.response.text[:200]}", reintentable=codigo >= 500) from exc
         except httpx.HTTPError as exc:
             raise ErrorLLM(f"Error al consultar Ollama: {exc}", reintentable=True) from exc
         datos = respuesta.json()

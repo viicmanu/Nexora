@@ -73,6 +73,7 @@ class ServicioAprendizaje:
                 fue_correccion = (sugerida or "").casefold() != carpeta.casefold()
 
                 repo.liberar_ruta(con, nueva_ruta, archivo_id)
+                repo.registrar_movimiento(con, archivo_id, origen, nueva_ruta, fila["categoria"], "usuario")
                 repo.actualizar_archivo(
                     con, archivo_id,
                     ruta_actual=str(nueva_ruta),
@@ -81,6 +82,7 @@ class ServicioAprendizaje:
                     origen_clasificacion="usuario",
                     confianza=1.0,
                     clasificado_en=repo.ahora(),
+                    duplicado_de=None,
                 )
                 if pendiente:
                     repo.resolver_pendiente(con, pendiente["id"])

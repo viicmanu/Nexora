@@ -1,4 +1,4 @@
-"""Cambio automático de motor: si se agota la cuota del principal, se usa el de respaldo hasta que se renueve."""
+"""Cambio automático de motor: si el principal se queda sin cuota, sin conexión o caído, se usa el de respaldo."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 T = TypeVar("T")
 
 ESPERA_POR_DEFECTO = 15 * 60  # segundos, si el proveedor no dice cuándo se renueva
+ESPERA_CAIDA = 2 * 60  # sin internet o servicio caído: se vuelve a probar pronto
 # Aunque el proveedor anuncie horas, se comprueba antes: la cuota puede renovarse o ampliarse.
 ESPERA_MAXIMA = 15 * 60
 
@@ -22,6 +23,7 @@ class AdaptadorConRespaldo(AdaptadorLLM):
         self.principal = principal
         self.respaldo = respaldo
         self._agotado_hasta = 0.0
+        self.motivo = ""  # cuota | caida
         self.reloj: Callable[[], float] = time.time
 
     @property
@@ -42,16 +44,19 @@ class AdaptadorConRespaldo(AdaptadorLLM):
             try:
                 return await operacion(self.principal)
             except ErrorLLM as exc:
-                if not exc.cuota:
-                    raise
-                espera = min(max(exc.espera or ESPERA_POR_DEFECTO, 5), ESPERA_MAXIMA)
+                if exc.cuota:
+                    espera, self.motivo = min(max(exc.espera or ESPERA_POR_DEFECTO, 5), ESPERA_MAXIMA), "cuota"
+                elif exc.reintentable:  # sin internet, tiempo agotado o servicio saturado
+                    espera, self.motivo = ESPERA_CAIDA, "caida"
+                else:
+                    raise  # clave o modelo mal configurados: cambiar de motor lo ocultaría
                 self._agotado_hasta = self.reloj() + espera
-                log.warning("Cuota agotada en %s: se usa %s", self.principal.descripcion, self.respaldo.descripcion)
+                log.warning("%s no disponible (%s): se usa %s", self.principal.descripcion, exc, self.respaldo.descripcion)
         try:
             return await operacion(self.respaldo)
         except ErrorLLM as exc:
             raise ErrorLLM(
-                f"Se agotó la cuota de {self.principal.descripcion} y el respaldo falló: {exc}", reintentable=True
+                f"{self.principal.descripcion} no está disponible y el respaldo falló: {exc}", reintentable=True
             ) from exc
 
     async def generar_json(self, sistema: str, prompt: str, esquema: dict[str, Any]) -> dict[str, Any]:

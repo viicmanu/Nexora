@@ -122,3 +122,10 @@ Con `NEXORA_LLM_RESPALDO_PROVEEDOR` y `NEXORA_LLM_RESPALDO_MODELO`, al agotarse 
 - `POST /api/corrections` (`{"texto", "archivo_id"?}`) interpreta "X quedó mal, va en Y" y devuelve una propuesta; se aplica con `POST /api/feedback`, que guarda el texto en `motivo` para las siguientes clasificaciones.
 - Embeddings: `paraphrase-multilingual-MiniLM-L12-v2` local (~135 MB, se descarga una vez en `<datos>/modelos`). Si no se puede descargar, se usa el básico de ChromaDB.
 - Indicaciones permanentes (`/api/rules`, `POST /api/rules/interpret`): reglas escritas por el usuario con acción `mover`, `preguntar`, `no_mover` o `guia`. Se envían al modelo, que responde cuál se aplica; la carpeta la fija la regla y mandan sobre los ejemplos. Con un modelo pequeño nunca se mueven archivos sin preguntar.
+
+## Deshacer, duplicados y organizar lo existente
+
+- Cada movimiento queda en la tabla `movimientos`. `POST /api/files/{id}/undo` devuelve el último a su sitio (sin sobrescribir), lo deja en la Bandeja y olvida el ejemplo aprendido.
+- Un archivo idéntico (mismo SHA-256) a otro que sigue en el PC no se envía a la IA: va a la Bandeja como duplicado. `POST /api/files/{id}/trash` lo manda a la papelera de Windows (solo copias).
+- `/api/organize`: cuenta los archivos sin organizar de una carpeta, los analiza de 10 en 10 sin mover (`/next`) y mueve solo los aprobados (`/approve`). El resto queda en la Bandeja.
+- El motor de respaldo también entra si el principal no responde (sin internet, tiempo agotado o error 5xx) y se vuelve a probar el principal a los 2 minutos. Los errores de clave o modelo no se ocultan.

@@ -30,12 +30,14 @@ class Resumen(BaseModel):
     total: int
     motor_ia: str
     usando_respaldo: bool
+    motivo_respaldo: str = Field(default="", description="cuota o caida")
     vuelve_en: int = Field(description="Segundos hasta reintentar con el motor principal.")
 
 
 class Evento(Archivo):
     error: str | None
     origen: str | None
+    se_puede_deshacer: bool = False
 
 
 class Destino(BaseModel):
@@ -93,14 +95,18 @@ def _consultar(servicios: Servicios, consulta, *args):
 async def resumen(s: Servicios = Depends(obtener_servicios)):
     datos = await asyncio.to_thread(_consultar, s, repo.resumen)
     vuelve_en = s.llm.vuelve_en if isinstance(s.llm, AdaptadorConRespaldo) else 0
-    return Resumen(**datos, motor_ia=s.llm.descripcion, usando_respaldo=vuelve_en > 0, vuelve_en=vuelve_en)
+    motivo = s.llm.motivo if isinstance(s.llm, AdaptadorConRespaldo) and vuelve_en else ""
+    return Resumen(
+        **datos, motor_ia=s.llm.descripcion, usando_respaldo=vuelve_en > 0, vuelve_en=vuelve_en, motivo_respaldo=motivo
+    )
 
 
 @router.get("/activity", response_model=list[Evento], dependencies=[organizar])
 async def actividad(limite: int = Query(50, ge=1, le=500), s: Servicios = Depends(obtener_servicios)):
     filas = await asyncio.to_thread(_consultar, s, repo.actividad, limite)
     return [
-        Evento(**Archivo.desde_fila(f).model_dump(), error=f["error"], origen=f["origen_clasificacion"]) for f in filas
+        Evento(**Archivo.desde_fila(f).model_dump(), error=f["error"], origen=f["origen_clasificacion"],
+               se_puede_deshacer=bool(f["se_puede_deshacer"])) for f in filas
     ]
 
 

@@ -21,6 +21,8 @@ class Database:
             # Bases creadas antes de que existiera la columna.
             if "motivo" not in {c["name"] for c in con.execute("PRAGMA table_info(feedback_aprendizaje)")}:
                 con.execute("ALTER TABLE feedback_aprendizaje ADD COLUMN motivo TEXT")
+            if "duplicado_de" not in {c["name"] for c in con.execute("PRAGMA table_info(archivos_indexados)")}:
+                con.execute("ALTER TABLE archivos_indexados ADD COLUMN duplicado_de TEXT")  # id del archivo original
 
     @contextmanager
     def conectar(self) -> Iterator[sqlite3.Connection]:

@@ -63,11 +63,15 @@ class VectoresFalsos:
         ]
         return sorted(res, key=lambda v: v.similitud, reverse=True)[:n]
 
+    def olvidar_ejemplos(self, archivo_id):
+        self.ejemplos = {k: v for k, v in self.ejemplos.items() if v[1].get("archivo_id") != archivo_id}
+
     def registrar_ejemplo(self, ejemplo_id, archivo_id, categoria, fue_correccion, fuente="usuario", motivo="") -> bool:
         if archivo_id not in self.archivos:
             return False
         doc, meta = self.archivos[archivo_id]
-        self.ejemplos[ejemplo_id] = (doc, {**meta, "categoria": categoria, "fuente": fuente, "motivo": motivo})
+        self.olvidar_ejemplos(archivo_id)
+        self.ejemplos[ejemplo_id] = (doc, {**meta, "categoria": categoria, "fuente": fuente, "motivo": motivo, "archivo_id": archivo_id})
         return True
 
 
@@ -339,7 +343,7 @@ def test_pregunta_si_no_hay_carpeta_y_acepta_una_externa(entorno):
 
     # Con el siguiente archivo parecido, Nexora ofrece primero la carpeta que eligió el usuario.
     otro = entrada / "apuntes2.txt"
-    otro.write_text("Apuntes de historia", encoding="utf-8")
+    otro.write_text("Apuntes de historia, segunda parte", encoding="utf-8")
     llm.respuestas.append(_respuesta_llm("Historia", 0.99))
     servicios.vectores.vecinos_aprendizaje = lambda c, n: [Vecino("x", elegida.as_posix(), 0.97, "apuntes.txt")]
     _indexar(servicios, otro)
@@ -601,3 +605,144 @@ def test_indicaciones_del_usuario(entorno):
     assert cliente.post("/api/rules", json={"texto": "sin carpeta", "accion": "mover"}).status_code == 422
     assert cliente.delete(f"/api/rules/{regla['id']}").status_code == 204
     assert cliente.delete(f"/api/rules/{regla['id']}").status_code == 404
+
+
+def test_deshacer_movimientos(entorno):
+    cliente, servicios, llm, entrada, tmp_path = entorno
+    (tmp_path / "organizado" / "Finanzas").mkdir(parents=True)
+    archivo = entrada / "f.txt"
+    archivo.write_text("Factura", encoding="utf-8")
+    llm.respuestas.append(_respuesta_llm("Finanzas", 0.95))
+    archivo_id = _indexar(servicios, archivo)
+    movido = tmp_path / "organizado" / "Finanzas" / "f.txt"
+    assert movido.exists() and f"ia:{archivo_id}" in servicios.vectores.ejemplos
+    assert next(e for e in cliente.get("/api/activity").json() if e["id"] == archivo_id)["se_puede_deshacer"]
+
+    # Deshacer lo que hizo la IA: vuelve a su sitio, a la Bandeja, y se olvida el ejemplo.
+    r = cliente.post(f"/api/files/{archivo_id}/undo")
+    assert r.status_code == 200, r.text
+    assert archivo.exists() and not movido.exists()
+    duda = cliente.get("/api/pending").json()[0]
+    assert duda["archivo"]["id"] == archivo_id and "Deshiciste" in duda["razonamiento"]
+    assert not any(m.get("archivo_id") == archivo_id for _, m in servicios.vectores.ejemplos.values())
+    assert cliente.post(f"/api/files/{archivo_id}/undo").status_code == 409
+
+    # Deshacer una decisión del usuario; si el sitio original está ocupado, no se sobrescribe.
+    destino = tmp_path / "Otra"
+    destino.mkdir()
+    cliente.post("/api/feedback", json={"archivo_id": archivo_id, "carpeta_elegida": str(destino)})
+    archivo.write_text("ocupado", encoding="utf-8")
+    assert cliente.post(f"/api/files/{archivo_id}/undo").status_code == 200
+    assert archivo.read_text(encoding="utf-8") == "ocupado" and (entrada / "f (1).txt").exists()
+
+    # Si el archivo ya no está donde lo dejó Nexora, no se puede deshacer.
+    cliente.post("/api/feedback", json={"archivo_id": archivo_id, "carpeta_elegida": str(destino)})
+    (destino / "f (1).txt").unlink()
+    assert cliente.post(f"/api/files/{archivo_id}/undo").status_code == 410
+
+
+def test_duplicados(entorno, monkeypatch):
+    import send2trash
+
+    cliente, servicios, llm, entrada, tmp_path = entorno
+    (tmp_path / "organizado" / "Finanzas").mkdir(parents=True)
+    original = entrada / "factura.txt"
+    original.write_text("Factura 123", encoding="utf-8")
+    llm.respuestas.append(_respuesta_llm("Finanzas", 0.95))
+    original_id = _indexar(servicios, original)
+    copia = entrada / "factura (copia).txt"
+    copia.write_text("Factura 123", encoding="utf-8")
+    copia_id = _indexar(servicios, copia)  # sin respuesta preparada: no se consulta a la IA
+    duda = cliente.get("/api/pending").json()[0]
+    assert duda["duplicado_de"]["id"] == original_id and duda["carpeta_etiqueta"] == "Finanzas"
+    assert cliente.post(f"/api/files/{original_id}/trash").status_code == 409  # solo copias
+
+    enviados = []
+    monkeypatch.setattr(send2trash, "send2trash", lambda ruta: (enviados.append(ruta), Path(ruta).unlink()))
+    assert cliente.post(f"/api/files/{copia_id}/trash").status_code == 204
+    assert enviados == [str(copia)] and not copia.exists() and cliente.get("/api/pending").json() == []
+
+    # Una copia de un archivo que ya no existe se clasifica normal; los vacíos no son duplicados.
+    (tmp_path / "organizado" / "Finanzas" / "factura.txt").unlink()
+    otra = entrada / "otra.txt"
+    otra.write_text("Factura 123", encoding="utf-8")
+    llm.respuestas.append(_respuesta_llm("Finanzas", 0.95))
+    _indexar(servicios, otra)
+    assert (tmp_path / "organizado" / "Finanzas" / "otra.txt").exists()
+    for n in ("v1.txt", "v2.txt"):
+        (entrada / n).write_text("", encoding="utf-8")
+        llm.respuestas.append(_respuesta_llm("Finanzas", 0.95))
+        _indexar(servicios, entrada / n)
+    assert all(d["duplicado_de"] is None for d in cliente.get("/api/pending").json())
+
+
+def test_organizar_carpeta_existente_por_lotes(entorno, monkeypatch):
+    from nexora.file_watcher import organizador as org
+
+    cliente, servicios, llm, entrada, tmp_path = entorno
+    (tmp_path / "organizado" / "Finanzas").mkdir(parents=True)
+    vieja = tmp_path / "Vieja"
+    (vieja / "sub").mkdir(parents=True)
+    (vieja / "proyecto" / ".git").mkdir(parents=True)
+    for i in range(3):
+        (vieja / f"a{i}.txt").write_text(f"archivo {i}", encoding="utf-8")
+    (vieja / "sub" / "b.txt").write_text("sub", encoding="utf-8")
+    (vieja / "proyecto" / "c.txt").write_text("codigo", encoding="utf-8")
+    (vieja / "~$temp.docx").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(org, "TAMANO_LOTE", 2)
+
+    assert cliente.post("/api/organize", json={"ruta": "C:/"}).status_code == 422
+    e = cliente.post("/api/organize", json={"ruta": str(vieja), "recursiva": True}).json()
+    assert (e["total"], e["estado"], e["hechos"]) == (4, "lista", 0)  # sin proyectos ni temporales; nada analizado
+
+    def lote(aprobar):
+        # El análisis corre en el bucle del servidor; se espera consultando el estado.
+        assert cliente.post("/api/organize/next").status_code == 200
+        for _ in range(200):
+            estado = cliente.get("/api/organize").json()
+            if estado["estado"] != "analizando":
+                break
+        return estado, cliente.post("/api/organize/approve", json={"aprobados": aprobar(estado)}).json()
+
+    llm.respuestas += [_respuesta_llm("Finanzas", 0.99), _respuesta_llm("Nueva/Carpeta", 0.99)]
+    estado, r = lote(lambda e: {d["archivo"]["id"]: d["carpeta_sugerida"] for d in e["lote"] if d["carpeta_existe"]})
+    assert len(estado["lote"]) == 2
+    assert (tmp_path / "organizado" / "Finanzas" / "a0.txt").exists() and (vieja / "a1.txt").exists()  # la nueva se pregunta
+    assert r["estado"] == "lista" and r["restantes"] == 2
+    assert [d["archivo"]["nombre"] for d in cliente.get("/api/pending").json()] == ["a1.txt"]
+
+    llm.respuestas += [_respuesta_llm("Finanzas", 0.99), _respuesta_llm("Finanzas", 0.99)]
+    estado, r = lote(lambda e: {})  # no aprueba nada: queda en la Bandeja
+    assert r["estado"] == "terminada" and len(cliente.get("/api/pending").json()) == 3
+    assert cliente.delete("/api/organize").status_code == 204 and not cliente.get("/api/organize").json()["activa"]
+
+
+def test_respaldo_tambien_si_el_principal_se_cae(entorno):
+    from nexora.core_ia.llm import AdaptadorConRespaldo, ErrorLLM
+
+    cliente, servicios, principal, entrada, tmp_path = entorno
+    respaldo = LLMFalso()
+    respaldo.modelo = "local"
+    mixto = AdaptadorConRespaldo(principal, respaldo)
+    servicios.llm = servicios.clasificador.llm = mixto
+
+    async def caido(*_):
+        raise ErrorLLM("503 UNAVAILABLE", reintentable=True)
+
+    async def mal_configurado(*_):
+        raise ErrorLLM("400 API key not valid")
+
+    def nuevo(nombre):
+        ruta = entrada / nombre
+        ruta.write_text(nombre, encoding="utf-8")
+        return ruta
+
+    principal.generar_json = mal_configurado
+    _indexar(servicios, nuevo("a.txt"))
+    assert not mixto.vuelve_en and cliente.get("/api/stats").json()["errores"] == 1  # no oculta el error de clave
+
+    principal.generar_json = caido
+    respaldo.respuestas.append(_respuesta_llm("Finanzas", 0.5))
+    _indexar(servicios, nuevo("b.txt"))
+    estado = cliente.get("/api/stats").json()
+    assert estado["usando_respaldo"] and estado["motivo_respaldo"] == "caida" and 0 < estado["vuelve_en"] <= 120

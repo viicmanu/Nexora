@@ -26,7 +26,7 @@ def nuevo_id() -> str:
 
 _COLUMNAS_EDITABLES = {
     "ruta_actual", "categoria", "resumen_ejecutivo", "palabras_clave", "confianza", "estado",
-    "origen_clasificacion", "modelo_llm", "error", "clasificado_en", "hash_sha256", "tamano_bytes",
+    "origen_clasificacion", "modelo_llm", "error", "clasificado_en", "hash_sha256", "tamano_bytes", "duplicado_de",
 }
 
 
@@ -105,7 +105,45 @@ def resumen(con: sqlite3.Connection) -> dict[str, Any]:
 
 
 def actividad(con: sqlite3.Connection, limite: int) -> list[Fila]:
-    return con.execute("SELECT * FROM archivos_indexados ORDER BY actualizado_en DESC LIMIT ?", (limite,)).fetchall()
+    return con.execute(
+        """
+        SELECT a.*, EXISTS (
+            SELECT 1 FROM movimientos m
+            WHERE m.archivo_id = a.id AND m.deshecho_en IS NULL AND m.destino = a.ruta_actual
+              AND m.creado_en = (SELECT MAX(creado_en) FROM movimientos WHERE archivo_id = a.id)
+        ) AS se_puede_deshacer
+        FROM archivos_indexados a ORDER BY a.actualizado_en DESC LIMIT ?
+        """,
+        (limite,),
+    ).fetchall()
+
+
+def registrar_movimiento(
+    con: sqlite3.Connection, archivo_id: str, origen: Path, destino: Path, categoria_anterior: str | None, autor: str
+) -> None:
+    if origen != destino:
+        con.execute(
+            "INSERT INTO movimientos (id, archivo_id, origen, destino, categoria_anterior, autor) VALUES (?, ?, ?, ?, ?, ?)",
+            (nuevo_id(), archivo_id, str(origen), str(destino), categoria_anterior, autor),
+        )
+
+
+def ultimo_movimiento(con: sqlite3.Connection, archivo_id: str) -> Fila | None:
+    fila = con.execute(
+        "SELECT * FROM movimientos WHERE archivo_id = ? ORDER BY creado_en DESC LIMIT 1", (archivo_id,)
+    ).fetchone()
+    return fila if fila and fila["deshecho_en"] is None else None
+
+
+def marcar_deshecho(con: sqlite3.Connection, movimiento_id: str) -> None:
+    con.execute("UPDATE movimientos SET deshecho_en = ? WHERE id = ?", (ahora(), movimiento_id))
+
+
+def buscar_por_hash(con: sqlite3.Connection, hash_sha256: str, salvo_ruta: Path) -> list[Fila]:
+    return con.execute(
+        "SELECT * FROM archivos_indexados WHERE hash_sha256 = ? AND ruta_actual <> ? AND duplicado_de IS NULL",
+        (hash_sha256, str(salvo_ruta)),
+    ).fetchall()
 
 
 def rutas_sin_terminar(con: sqlite3.Connection) -> list[Path]:

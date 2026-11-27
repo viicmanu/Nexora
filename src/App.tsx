@@ -4,6 +4,8 @@ import {
   type Ajustes, type Archivo, type Carpeta, type Destino, type Evento, type Pendiente, type Propuesta, type PruebaIA, type Resumen,
 } from './api'
 import { Indicaciones, NuevaIndicacion } from './Indicaciones'
+import { Organizar } from './Organizar'
+import logo from './assets/logo.png'
 
 type Theme = 'light' | 'dark' | 'system'
 type Vista = 'dashboard' | 'inbox' | 'folder' | 'rules' | 'history' | 'settings'
@@ -175,7 +177,7 @@ function Corregir({ archivo, destinos, avisar, alTerminar }: { archivo?: Archivo
   )
 }
 
-function TarjetaDuda({ duda, destinos, resolver }: { duda: Pendiente; destinos: Destino[]; resolver: Resolver }) {
+function TarjetaDuda({ duda, destinos, resolver, papelera }: { duda: Pendiente; destinos: Destino[]; resolver: Resolver; papelera: (d: Pendiente) => Promise<void> }) {
   const [modo, setModo] = useState<'' | 'cambiar' | 'nueva'>('')
   const [nueva, setNueva] = useState('')
   const [ocupado, setOcupado] = useState(false)
@@ -189,14 +191,16 @@ function TarjetaDuda({ duda, destinos, resolver }: { duda: Pendiente; destinos: 
     <div className="file-card" data-archivo={duda.archivo.nombre}>
       <div className={`file-icon ${duda.archivo.nombre.endsWith('.docx') ? 'docx' : ''}`}><span>{tipoDe(duda.archivo.nombre)}</span></div>
       <div className="file-info">
-        <div className="file-title"><div><strong>{duda.archivo.nombre}</strong><p>{duda.archivo.resumen_ejecutivo}</p></div><span className="confidence">{Math.round(duda.confianza * 100)}% segura</span></div>
-        {!duda.carpeta_existe && <p className="pregunta">No encontré una carpeta tuya para este archivo. ¿Dónde lo pongo?</p>}
+        <div className="file-title"><div><strong>{duda.archivo.nombre}</strong><p>{duda.archivo.resumen_ejecutivo}</p></div>{!duda.duplicado_de && !duda.razonamiento?.startsWith('Deshiciste') && <span className="confidence">{Math.round(duda.confianza * 100)}% segura</span>}</div>
+        {duda.duplicado_de && <p className="pregunta">Es una copia exacta de {duda.duplicado_de.nombre} ({duda.duplicado_de.ruta_actual}).</p>}
+        {!duda.duplicado_de && !duda.carpeta_existe && <p className="pregunta">No encontré una carpeta tuya para este archivo. ¿Dónde lo pongo?</p>}
         <div className="suggestion"><small>{duda.carpeta_existe ? 'TU CARPETA' : 'CARPETA NUEVA'}</small><strong title={duda.carpeta_sugerida}><Icon name="folder" size={15} /> {duda.carpeta_etiqueta}</strong></div>
-        {duda.razonamiento?.startsWith('Según tu indicación') && <p className="panel-description">{duda.razonamiento}</p>}
+        {/^(Según tu indicación|Deshiciste)/.test(duda.razonamiento ?? '') && <p className="panel-description">{duda.razonamiento}</p>}
         {!duda.archivo.existe_en_disco && <p className="aviso-error">El archivo ya no está en su ubicación.</p>}
         <div className="file-actions">
           <button className="confirm" disabled={ocupado} onClick={() => elegir(duda.carpeta_sugerida)}>{ocupado ? 'Moviendo…' : duda.carpeta_existe ? 'Confirmar' : 'Crear y mover'}</button>
           <button className="change" disabled={ocupado} aria-expanded={modo === 'cambiar'} onClick={() => alternar('cambiar')}>{duda.carpeta_existe ? 'Cambiar carpeta' : 'Elegir carpeta'} <Icon name="chevron" size={15} /></button>
+          {duda.duplicado_de && <button className="change" disabled={ocupado} onClick={async () => { setOcupado(true); try { await papelera(duda) } finally { setOcupado(false) } }}>Enviar a la papelera</button>}
           <button className="create" disabled={ocupado} aria-expanded={modo === 'nueva'} onClick={() => alternar('nueva')}><Icon name="plus" size={15} /> Nueva</button>
         </div>
         {modo === 'cambiar' && <SelectorCarpeta nombre={duda.archivo.nombre} primero={duda.alternativas} excluir={duda.carpeta_sugerida} destinos={destinos} ocupado={ocupado} elegir={(c) => void elegir(c)} />}
@@ -211,12 +215,13 @@ function TarjetaDuda({ duda, destinos, resolver }: { duda: Pendiente; destinos: 
   )
 }
 
-function ListaDudas({ dudas, destinos, resolver }: { dudas: Pendiente[]; destinos: Destino[]; resolver: Resolver }) {
+function ListaDudas({ dudas, destinos, resolver, papelera }: { dudas: Pendiente[]; destinos: Destino[]; resolver: Resolver; papelera: (d: Pendiente) => Promise<void> }) {
   if (!dudas.length) return <div className="empty-state"><span>✓</span><strong>Todo está en orden</strong><p>No hay archivos pendientes de revisión.</p></div>
-  return <>{dudas.map((d) => <TarjetaDuda key={d.pendiente_id} duda={d} destinos={destinos} resolver={resolver} />)}</>
+  return <>{dudas.map((d) => <TarjetaDuda key={d.pendiente_id} duda={d} destinos={destinos} resolver={resolver} papelera={papelera} />)}</>
 }
 
-function Carpetas({ avisar }: { avisar: Avisar }) {
+function Carpetas({ avisar, refrescar }: { avisar: Avisar; refrescar: () => Promise<void> }) {
+  const [organizar, setOrganizar] = useState<{ ruta: string; recursiva: boolean } | null>(null)
   const [lista, setLista] = useState<Carpeta[]>([])
   const [ruta, setRuta] = useState('')
   const [recursiva, setRecursiva] = useState(false)
@@ -247,6 +252,8 @@ function Carpetas({ avisar }: { avisar: Avisar }) {
   }
 
   return (
+    <div className="historial">
+    <Organizar inicial={organizar} avisar={avisar} alCambiar={() => void refrescar()} />
     <article className="panel pagina">
       <h2>Carpetas Vigiladas <span>{lista.length}</span></h2>
       <p className="panel-description">Los archivos nuevos que lleguen aquí se analizan con la IA y pueden moverse automáticamente.</p>
@@ -261,16 +268,18 @@ function Carpetas({ avisar }: { avisar: Avisar }) {
           <div className="item" key={c.id}>
             <Icon name="folder" />
             <div><strong>{c.ruta}</strong><p>{c.existe ? (c.recursiva ? 'Vigilando con subcarpetas' : 'Vigilando') : 'La carpeta ya no existe'}</p></div>
+            <button className="boton" disabled={!c.existe} onClick={() => setOrganizar({ ruta: c.ruta, recursiva: c.recursiva })}>Organizar lo que ya hay</button>
             <button className="boton" onClick={() => quitar(c)}>Quitar</button>
           </div>
         ))}
         {!lista.length && <p className="panel-description">No hay carpetas vigiladas. Añade una para empezar.</p>}
       </div>
     </article>
+    </div>
   )
 }
 
-function Historial({ eventos, destinos, avisar, refrescar }: { eventos: Evento[]; destinos: Destino[]; avisar: Avisar; refrescar: () => Promise<void> }) {
+function Historial({ eventos, destinos, avisar, refrescar, deshacer }: { eventos: Evento[]; destinos: Destino[]; avisar: Avisar; refrescar: () => Promise<void>; deshacer: (e: Evento) => Promise<void> }) {
   const [q, setQ] = useState('')
   const [resultados, setResultados] = useState<Archivo[] | null>(null)
   const [abierto, setAbierto] = useState('')
@@ -297,7 +306,7 @@ function Historial({ eventos, destinos, avisar, refrescar }: { eventos: Evento[]
   }
   const trasCorregir = async () => { setCorrigiendo(''); setResultados(null); setQ(''); await refrescar() }
   const alternar = (id: string) => { setAbierto(abierto === id ? '' : id); setRespuesta(''); setPregunta('') }
-  const lista: (Archivo & { error?: string | null })[] = resultados ?? eventos
+  const lista: (Archivo & { error?: string | null; se_puede_deshacer?: boolean })[] = resultados ?? eventos
 
   return (
     <div className="historial">
@@ -325,6 +334,7 @@ function Historial({ eventos, destinos, avisar, refrescar }: { eventos: Evento[]
                 {a.error && <p className="aviso-error">{a.error}</p>}
               </div>
               {a.estado === 'error' && <button className="boton" onClick={() => reintentar(a.id)}>Reintentar</button>}
+              {'se_puede_deshacer' in a && a.se_puede_deshacer && <button className="boton" onClick={() => void deshacer(a as Evento)}>Deshacer</button>}
               {(a.estado === 'clasificado' || a.estado === 'corregido') && a.existe_en_disco && <button className="boton" aria-expanded={corrigiendo === a.id} onClick={() => setCorrigiendo(corrigiendo === a.id ? '' : a.id)}>¿Mal ubicado?</button>}
               <button className="boton" aria-expanded={abierto === a.id} disabled={!a.existe_en_disco || cargando} onClick={() => alternar(a.id)}>Preguntar a la IA</button>
             </div>
@@ -498,16 +508,31 @@ function App() {
     } catch (err) { avisar(mensaje(err), true) }
     await refrescar()
   }
+  const deshacer = async (e: Evento) => {
+    try {
+      await api.deshacer(e.id)
+      avisar(`${e.nombre} volvió a su sitio. Está en la Bandeja de Dudas.`)
+    } catch (err) { avisar(mensaje(err), true) }
+    await refrescar()
+  }
+  const papelera = async (d: Pendiente) => {
+    try {
+      await api.aPapelera(d.archivo.id)
+      avisar(`${d.archivo.nombre} se envió a la papelera. Puedes recuperarlo desde allí.`)
+    } catch (err) { avisar(mensaje(err), true) }
+    await refrescar()
+  }
   const confirmarTodas = async () => {
     setMasOpen(false)
     let bien = 0
     let ultimo = ''
     // Las carpetas nuevas no se crean en bloque: cada una se pregunta.
-    const seguras = dudas.filter((d) => d.carpeta_existe)
+    // Ni copias, ni lo que el usuario acaba de devolver a su sitio.
+    const seguras = dudas.filter((d) => d.carpeta_existe && !d.duplicado_de && !d.razonamiento?.startsWith('Deshiciste'))
     for (const d of seguras) {
       try { await api.decidir(d.archivo.id, d.carpeta_sugerida); bien++ } catch (err) { ultimo = `${d.archivo.nombre}: ${mensaje(err)}` }
     }
-    avisar(ultimo ? `${bien} confirmados. ${ultimo}` : `${bien} ${bien === 1 ? "archivo confirmado" : "archivos confirmados"}.${seguras.length < dudas.length ? " Los demás necesitan que elijas carpeta." : ""}`, !!ultimo)
+    avisar(ultimo ? `${bien} confirmados. ${ultimo}` : `${bien} ${bien === 1 ? "archivo confirmado" : "archivos confirmados"}.${seguras.length < dudas.length ? " Los demás necesitan tu decisión." : ""}`, !!ultimo)
     await refrescar()
   }
   const importar = async (rutas: string[]) => {
@@ -548,7 +573,7 @@ function App() {
         <aside className="sidebar">
           <div>
             <div className="brand">
-              <div className="brand-mark"><span /><span /></div>
+              <img className="brand-logo" src={logo} alt="" />
               <div><strong>Nexora</strong><small>INTELLIGENT FILES</small></div>
             </div>
             <nav aria-label="Navegación principal">
@@ -606,7 +631,7 @@ function App() {
 
           {conectado && resumen?.usando_respaldo && (
             <div className="banner respaldo" role="status">
-              <p>Se agotó la cuota de la IA principal. Nexora sigue con <strong>{resumen.motor_ia}</strong> y volverá a intentarlo en {resumen.vuelve_en < 5400 ? `${Math.max(1, Math.round(resumen.vuelve_en / 60))} min` : `${Math.round(resumen.vuelve_en / 3600)} h`}.</p>
+              <p>{resumen.motivo_respaldo === 'caida' ? 'La IA principal no responde (sin internet o servicio caído).' : 'Se agotó la cuota de la IA principal.'} Nexora sigue con <strong>{resumen.motor_ia}</strong> y volverá a intentarlo en {resumen.vuelve_en < 5400 ? `${Math.max(1, Math.round(resumen.vuelve_en / 60))} min` : `${Math.round(resumen.vuelve_en / 3600)} h`}.</p>
             </div>
           )}
 
@@ -654,7 +679,7 @@ function App() {
                   </div>
                 </div>
                 <p className="panel-description">La IA necesita tu criterio para clasificar estos archivos.</p>
-                <div className="file-list"><ListaDudas dudas={dudas.slice(0, 2)} destinos={destinos} resolver={resolver} /></div>
+                <div className="file-list"><ListaDudas dudas={dudas.slice(0, 2)} destinos={destinos} resolver={resolver} papelera={papelera} /></div>
                 <footer className="learning-note"><span>✦</span><p><strong>Cada decisión mejora a Nexora</strong><br/>La IA recordará tus preferencias para el futuro.</p></footer>
               </article>
 
@@ -669,6 +694,7 @@ function App() {
                       <div className="timeline-mark">{e.estado === 'error' ? '!' : e.estado === 'pendiente' ? '?' : e.estado === 'procesando' ? '…' : '✓'}</div>
                       <div className="event">
                         <div className="event-head"><strong>{e.nombre}</strong><time>{haceCuanto(e.actualizado_en)}</time></div>
+                        {e.se_puede_deshacer && <button className="deshacer" onClick={() => void deshacer(e)}>Deshacer</button>}
                         <div className="destination"><span>→</span><strong>{e.estado === 'clasificado' || e.estado === 'corregido' ? (e.carpeta ? nombrar(e.carpeta, destinos) : 'Se dejó en su sitio') : etiquetas[e.estado]}</strong></div>
                       </div>
                     </div>
@@ -683,12 +709,12 @@ function App() {
           {vista === 'inbox' && (
             <article className="panel pagina">
               <div className="panel-heading"><h2>Pendientes <span>{dudas.length}</span></h2><button className="boton" disabled={!dudas.length} onClick={confirmarTodas}>Confirmar todas</button></div>
-              <div className="file-list"><ListaDudas dudas={dudas} destinos={destinos} resolver={resolver} /></div>
+              <div className="file-list"><ListaDudas dudas={dudas} destinos={destinos} resolver={resolver} papelera={papelera} /></div>
             </article>
           )}
           {vista === 'rules' && <Indicaciones key={String(conectado)} avisar={avisar} selector={selectorCarpeta} />}
-          {vista === 'folder' && <Carpetas key={String(conectado)} avisar={avisar} />}
-          {vista === 'history' && <Historial eventos={eventos} destinos={destinos} avisar={avisar} refrescar={refrescar} />}
+          {vista === 'folder' && <Carpetas key={String(conectado)} avisar={avisar} refrescar={refrescar} />}
+          {vista === 'history' && <Historial eventos={eventos} destinos={destinos} deshacer={deshacer} avisar={avisar} refrescar={refrescar} />}
           {vista === 'settings' && <Configuracion key={String(conectado)} nombre={nombre} setNombre={setNombre} theme={theme} cambiarTema={cambiarTema} avisar={avisar} />}
         </section>
       </div>

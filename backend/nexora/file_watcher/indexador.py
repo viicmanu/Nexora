@@ -38,8 +38,8 @@ class Indexador:
         self.umbral = umbral_confianza
         self.max_caracteres = max_caracteres
 
-    async def procesar(self, ruta: Path) -> str | None:
-        """Devuelve el id del archivo indexado, o None si se ignoró."""
+    async def procesar(self, ruta: Path, *, solo_proponer: bool = False) -> str | None:
+        """Devuelve el id del archivo indexado, o None si se ignoró. Con solo_proponer nunca se mueve: decide el usuario."""
         if not ruta.is_file():
             return None
         hash_archivo = await asyncio.to_thread(calcular_hash, ruta)
@@ -51,8 +51,10 @@ class Indexador:
         ):
             return existente["id"]  # ya indexado y sin cambios
 
-        texto = await asyncio.to_thread(extraer_texto, ruta, self.max_caracteres)
         archivo_id = await asyncio.to_thread(self._registrar, ruta, hash_archivo, existente)
+        if await asyncio.to_thread(self._marcar_si_duplicado, archivo_id, ruta, hash_archivo):
+            return archivo_id  # copia exacta: no hace falta consultar a la IA
+        texto = await asyncio.to_thread(extraer_texto, ruta, self.max_caracteres)
         try:
             resultado = await self.clasificador.clasificar(ruta.name, ruta.suffix.lower(), texto)
         except Exception as exc:
@@ -61,7 +63,7 @@ class Indexador:
             return archivo_id
 
         try:
-            ruta_final = await asyncio.to_thread(self._aplicar, archivo_id, ruta, resultado)
+            ruta_final = await asyncio.to_thread(self._aplicar, archivo_id, ruta, resultado, solo_proponer)
         except Exception as exc:
             log.exception("Fallo al mover o registrar %s", ruta)
             await asyncio.to_thread(self._marcar_error, archivo_id, str(exc))
@@ -105,7 +107,7 @@ class Indexador:
                 ruta_actual=str(ruta),
             )
 
-    def _aplicar(self, archivo_id: str, ruta: Path, resultado: ResultadoClasificacion) -> Path:
+    def _aplicar(self, archivo_id: str, ruta: Path, resultado: ResultadoClasificacion, solo_proponer: bool = False) -> Path:
         comunes = dict(
             categoria=resultado.carpeta_destino,
             resumen_ejecutivo=resultado.resumen_ejecutivo,
@@ -124,11 +126,12 @@ class Indexador:
             log.info("%s se deja en su sitio por indicación del usuario", ruta.name)
             return ruta
         # Sin intervención del usuario solo se usan carpetas que ya existen; una nueva siempre se consulta.
-        decidido = resultado.confianza >= self.umbral and resultado.accion != "preguntar"
+        decidido = not solo_proponer and resultado.confianza >= self.umbral and resultado.accion != "preguntar"
         if decidido and destino_existe(self.raiz, resultado.carpeta_destino):
             nueva_ruta = mover_seguro(ruta, ruta_destino(self.raiz, resultado.carpeta_destino))
             with self.db.conectar() as con:
                 repo.liberar_ruta(con, nueva_ruta, archivo_id)
+                repo.registrar_movimiento(con, archivo_id, ruta, nueva_ruta, None, "ia")
                 repo.actualizar_archivo(
                     con, archivo_id, **comunes, ruta_actual=str(nueva_ruta), estado="clasificado",
                     origen_clasificacion="ia", clasificado_en=repo.ahora(),
@@ -147,6 +150,31 @@ class Indexador:
             )
         log.info("%s queda pendiente de revisión (%.0f%%)", ruta.name, resultado.confianza * 100)
         return ruta
+
+    def _marcar_si_duplicado(self, archivo_id: str, ruta: Path, hash_archivo: str) -> bool:
+        """Si es idéntico a otro archivo que sigue en el PC, lo deja en la Bandeja para que el usuario decida."""
+        if ruta.stat().st_size == 0:
+            return False  # los archivos vacíos son todos iguales
+        with self.db.conectar() as con:
+            candidatos = repo.buscar_por_hash(con, hash_archivo, ruta)
+        original = next(
+            (f for f in candidatos if Path(f["ruta_actual"]).is_file() and calcular_hash(Path(f["ruta_actual"])) == hash_archivo),
+            None,
+        )
+        if original is None:
+            return False
+        carpeta = original["categoria"] or Path(original["ruta_actual"]).parent.as_posix()
+        with self.db.conectar() as con:
+            repo.actualizar_archivo(
+                con, archivo_id, estado="pendiente", duplicado_de=original["id"], categoria=carpeta,
+                resumen_ejecutivo=original["resumen_ejecutivo"], palabras_clave=original["palabras_clave"], confianza=0.0,
+            )
+            anterior = repo.pendiente_abierta(con, archivo_id)
+            if anterior:
+                repo.resolver_pendiente(con, anterior["id"])
+            repo.crear_pendiente(con, archivo_id, carpeta, 0.0, [], f"Es una copia exacta de {original['nombre']}.")
+        log.info("%s es una copia exacta de %s", ruta.name, original["ruta_actual"])
+        return True
 
     def _marcar_error(self, archivo_id: str, mensaje: str) -> None:
         with self.db.conectar() as con:
