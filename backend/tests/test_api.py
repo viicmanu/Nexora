@@ -232,7 +232,7 @@ def test_emparejamiento_movil_con_permisos_limitados(entorno):
 
     cabecera = {"Authorization": f"Bearer {token_movil}"}
     assert cliente.get("/api/files/search", params={"q": "x"}, headers=cabecera).status_code == 200
-    assert cliente.get("/api/pending", headers=cabecera).status_code == 403
+    assert cliente.get("/api/folders", headers=cabecera).status_code == 403
     assert cliente.post("/api/devices/pairing-code", headers=cabecera).status_code == 403
 
     movil_id = emparejado.json()["dispositivo_id"]

@@ -27,6 +27,7 @@ def nuevo_id() -> str:
 _COLUMNAS_EDITABLES = {
     "ruta_actual", "categoria", "resumen_ejecutivo", "palabras_clave", "confianza", "estado",
     "origen_clasificacion", "modelo_llm", "error", "clasificado_en", "hash_sha256", "tamano_bytes", "duplicado_de",
+    "origen_dispositivo",
 }
 
 
@@ -291,6 +292,100 @@ def revocar_dispositivos(con: sqlite3.Connection, condicion: str, parametros: tu
         (ahora(), *parametros),
     )
     return cursor.rowcount
+
+
+def telefono_activo(con: sqlite3.Connection) -> Fila | None:
+    return con.execute(
+        "SELECT * FROM dispositivos_vinculados WHERE tipo = 'movil' AND estado = 'activo'"
+    ).fetchone()
+
+
+def obtener_dispositivo(con: sqlite3.Connection, dispositivo_id: str) -> Fila | None:
+    return con.execute("SELECT * FROM dispositivos_vinculados WHERE id = ?", (dispositivo_id,)).fetchone()
+
+
+def registrar_heartbeat(con: sqlite3.Connection, dispositivo_id: str, ip: str | None) -> None:
+    momento = ahora()
+    con.execute(
+        "UPDATE dispositivos_vinculados SET ultimo_heartbeat = ?, ultimo_acceso = ?, ultima_ip = ? WHERE id = ?",
+        (momento, momento, ip, dispositivo_id),
+    )
+
+
+def renombrar_dispositivo(con: sqlite3.Connection, dispositivo_id: str, nombre: str) -> Fila | None:
+    return con.execute(
+        "UPDATE dispositivos_vinculados SET nombre = ? WHERE id = ? AND estado = 'activo' RETURNING *",
+        (nombre, dispositivo_id),
+    ).fetchone()
+
+
+def actualizar_permisos_moviles(con: sqlite3.Connection, permisos: list[str]) -> None:
+    con.execute("UPDATE dispositivos_vinculados SET permisos = ? WHERE tipo = 'movil'", (json.dumps(permisos),))
+
+
+# ---------------------------------------------------------------------------
+# subidas desde el teléfono
+# ---------------------------------------------------------------------------
+
+def buscar_subida(con: sqlite3.Connection, dispositivo_id: str, *, subida_id: str | None = None, cliente_id: str | None = None) -> Fila | None:
+    if subida_id:
+        return con.execute("SELECT * FROM subidas WHERE id = ? AND dispositivo_id = ?", (subida_id, dispositivo_id)).fetchone()
+    return con.execute(
+        "SELECT * FROM subidas WHERE cliente_id = ? AND dispositivo_id = ?", (cliente_id, dispositivo_id)
+    ).fetchone()
+
+
+def crear_subida(con: sqlite3.Connection, dispositivo_id: str, cliente_id: str, nombre: str, tamano: int, hash_sha256: str) -> Fila:
+    return con.execute(
+        """
+        INSERT INTO subidas (id, dispositivo_id, cliente_id, nombre, tamano, hash_sha256) VALUES (?, ?, ?, ?, ?, ?)
+        RETURNING *
+        """,
+        (nuevo_id(), dispositivo_id, cliente_id, nombre, tamano, hash_sha256),
+    ).fetchone()
+
+
+def actualizar_subida(con: sqlite3.Connection, subida_id: str, **campos: Any) -> Fila:
+    campos["actualizado_en"] = ahora()
+    asignaciones = ", ".join(f"{c} = :{c}" for c in campos)
+    return con.execute(
+        f"UPDATE subidas SET {asignaciones} WHERE id = :_id RETURNING *", {**campos, "_id": subida_id}
+    ).fetchone()
+
+
+def subidas_sin_terminar(con: sqlite3.Connection, dispositivo_id: str) -> list[Fila]:
+    return con.execute(
+        "SELECT * FROM subidas WHERE dispositivo_id = ? AND estado = 'recibiendo'", (dispositivo_id,)
+    ).fetchall()
+
+
+def organizados(con: sqlite3.Connection, desde: str | None, limite: int) -> list[Fila]:
+    """Archivos ya ubicados, cambiados después de `desde` (sincronización incremental del teléfono)."""
+    return con.execute(
+        """
+        SELECT * FROM archivos_indexados
+        WHERE estado IN ('clasificado', 'corregido') AND categoria IS NOT NULL AND actualizado_en > ?
+        ORDER BY actualizado_en LIMIT ?
+        """,
+        (desde or "", limite),
+    ).fetchall()
+
+
+def ids_organizados(con: sqlite3.Connection) -> list[str]:
+    return [f["id"] for f in con.execute(
+        "SELECT id FROM archivos_indexados WHERE estado IN ('clasificado', 'corregido') AND categoria IS NOT NULL"
+    )]
+
+
+def descartar_pendiente(con: sqlite3.Connection, pendiente_id: str) -> Fila | None:
+    """"Ignorar": el archivo se queda donde está y sale de la Bandeja."""
+    fila = con.execute(
+        "UPDATE clasificaciones_pendientes SET estado = 'descartada', resuelto_en = ? WHERE id = ? AND estado = 'abierta' RETURNING *",
+        (ahora(), pendiente_id),
+    ).fetchone()
+    if fila:
+        actualizar_archivo(con, fila["archivo_id"], estado="clasificado", categoria=None, origen_clasificacion="usuario")
+    return fila
 
 
 def crear_codigo_emparejamiento(con: sqlite3.Connection, codigo_hash: str, creado_por: str, vigencia: timedelta) -> str:

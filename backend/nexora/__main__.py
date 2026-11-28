@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import uvicorn
+import asyncio
 from dotenv import load_dotenv
 
 
@@ -15,9 +15,10 @@ def main() -> None:
 
     from nexora.config import Settings
     from nexora.main import create_app
+    from nexora.servidor import servir
 
     settings = Settings()
-    uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
+    asyncio.run(servir(create_app(settings), settings))
 
 
 if __name__ == "__main__":

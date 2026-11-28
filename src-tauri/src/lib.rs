@@ -1,3 +1,7 @@
+mod fallos;
+mod instalador;
+mod red_movil;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -60,12 +64,39 @@ fn iniciar_motor(motor: State<Motor>) -> Result<(), String> {
     Ok(())
 }
 
+/// Abre el puerto del teléfono solo para redes privadas. Windows pide permiso de administrador.
+#[tauri::command]
+fn permitir_firewall(puerto: u16) -> Result<(), String> {
+    let reglas = format!(
+        "New-NetFirewallRule -DisplayName 'Nexora (teléfono)' -Direction Inbound -Protocol TCP -LocalPort {puerto} -Profile Private -Action Allow; \
+         New-NetFirewallRule -DisplayName 'Nexora (descubrimiento)' -Direction Inbound -Protocol UDP -LocalPort 5353 -Profile Private -Action Allow"
+    );
+    Command::new("powershell")
+        .args(["-NoProfile", "-Command", &format!("Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-Command',\"{reglas}\"")])
+        .status()
+        .map_err(|e| e.to_string())
+        .and_then(|s| if s.success() { Ok(()) } else { Err("No se concedió el permiso.".into()) })
+}
+
+#[tauri::command]
+fn abrir_ajustes_wifi() -> Result<(), String> {
+    Command::new("cmd").args(["/C", "start", "", "ms-settings:network-wifi"]).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(instalador::init())
         .manage(Motor(Mutex::new(None)))
         .setup(|app| {
+            fallos::instalar(app.handle());
+            #[cfg(mobile)]
+            app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -75,7 +106,9 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![token_escritorio, iniciar_motor])
+        .invoke_handler(tauri::generate_handler![token_escritorio, iniciar_motor, permitir_firewall, abrir_ajustes_wifi,
+            red_movil::red_peticion, red_movil::red_subir_fragmento, red_movil::red_descargar,
+            red_movil::archivo_sha256, red_movil::buscar_pc, red_movil::copiar_a_cola, red_movil::escribir_cola, instalador::instalar_apk, fallos::leer_fallos, fallos::borrar_fallo])
         .build(tauri::generate_context!())
         .expect("error al iniciar Nexora")
         .run(|app, evento| {

@@ -16,7 +16,7 @@ from nexora.core_ia.errores import ArchivoNoDisponible, ArchivoNoEncontrado
 from nexora.core_ia.llm import ErrorLLM
 from nexora.db import repositorio as repo
 from nexora.db.repositorio import Fila
-from nexora.security.tokens import ORGANIZAR
+from nexora.security.tokens import BANDEJA, ORGANIZAR
 from nexora.servicios import Servicios
 
 router = APIRouter(prefix="/api", tags=["aprendizaje"])
@@ -41,7 +41,7 @@ def a_pendiente(f: repo.Fila, catalogo, servicios: Servicios) -> Pendiente:
     )
 
 
-@router.get("/pending", response_model=list[Pendiente], dependencies=[Depends(requiere(ORGANIZAR))])
+@router.get("/pending", response_model=list[Pendiente], dependencies=[Depends(requiere(ORGANIZAR, BANDEJA))])
 async def listar_pendientes(
     limite: int = Query(50, ge=1, le=200), servicios: Servicios = Depends(obtener_servicios)
 ) -> list[Pendiente]:
@@ -82,7 +82,7 @@ async def proponer_correccion(
 @router.post("/feedback", response_model=RespuestaFeedback)
 async def registrar_feedback(
     solicitud: SolicitudFeedback,
-    dispositivo: Fila = Depends(requiere(ORGANIZAR)),
+    dispositivo: Fila = Depends(requiere(ORGANIZAR, BANDEJA)),
     servicios: Servicios = Depends(obtener_servicios),
 ) -> RespuestaFeedback:
     """Mueve el archivo a la carpeta elegida y guarda la decisión como ejemplo para futuras clasificaciones.

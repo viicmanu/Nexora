@@ -129,3 +129,13 @@ Con `NEXORA_LLM_RESPALDO_PROVEEDOR` y `NEXORA_LLM_RESPALDO_MODELO`, al agotarse 
 - Un archivo idéntico (mismo SHA-256) a otro que sigue en el PC no se envía a la IA: va a la Bandeja como duplicado. `POST /api/files/{id}/trash` lo manda a la papelera de Windows (solo copias).
 - `/api/organize`: cuenta los archivos sin organizar de una carpeta, los analiza de 10 en 10 sin mover (`/next`) y mueve solo los aprobados (`/approve`). El resto queda en la Bandeja.
 - El motor de respaldo también entra si el principal no responde (sin internet, tiempo agotado o error 5xx) y se vuelve a probar el principal a los 2 minutos. Los errores de clave o modelo no se ocultan.
+
+## Teléfono vinculado (red local, 1 a 1)
+
+- Dos servidores en el mismo proceso: `127.0.0.1:8765` (HTTP, app de escritorio) y `0.0.0.0:8767` (HTTPS, teléfono). En la red local solo se acepta el teléfono vinculado activo y solo si la red de Windows es **privada** (`NEXORA_EXIGIR_RED_PRIVADA`). Variables: `NEXORA_LAN_HABILITADA`, `NEXORA_HOST_LAN`, `NEXORA_PUERTO_LAN`, `NEXORA_CARPETA_RECIBIDOS`.
+- TLS con certificado autofirmado del PC (`<datos>/tls`). La huella SHA-256 va en el QR y el teléfono la fija (*certificate pinning*).
+- Descubrimiento por mDNS (`_nexora._tcp`), reanunciado si cambian las IP. El QR lleva también las IP y el puerto.
+- Vinculación 1 a 1: índice único parcial `ux_un_telefono_activo` y canje en `BEGIN IMMEDIATE`; un segundo teléfono recibe 409. `POST /api/devices/pairing-code?reemplazar=true` revoca el anterior.
+- Permisos del teléfono: `files:search`, `files:explain`, `files:upload`, `files:download`, `files:list`, `inbox:review`, `devices:read`.
+- Rutas: `POST /api/devices/heartbeat` (cada ~30 s; sin latido en 90 s = desconectado), `GET /api/devices/events` (SSE), `GET /api/devices/phone`, `PATCH|DELETE /api/devices/{id}`, `POST /api/uploads` → `PUT /api/uploads/{id}?offset=` (fragmentos ≤ 8 MB) → `POST /api/uploads/{id}/complete` (verifica SHA-256), `GET /api/files/organized?since=`, `GET /api/files/{id}/download` (solo archivos del índice, admite Range), `POST /api/pending/{id}/ignore`.
+

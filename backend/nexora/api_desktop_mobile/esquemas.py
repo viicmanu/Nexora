@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +23,7 @@ class Archivo(BaseModel):
     estado: str
     existe_en_disco: bool
     actualizado_en: str
+    origen_dispositivo: str | None = Field(default=None, description='"móvil: <nombre>" si llegó desde el teléfono.')
 
     @classmethod
     def desde_fila(cls, fila: Fila) -> "Archivo":
@@ -36,6 +38,7 @@ class Archivo(BaseModel):
             estado=fila["estado"],
             existe_en_disco=Path(fila["ruta_actual"]).is_file(),
             actualizado_en=fila["actualizado_en"],
+            origen_dispositivo=fila["origen_dispositivo"] if "origen_dispositivo" in fila.keys() else None,
         )
 
 
@@ -141,6 +144,18 @@ class SolicitudTema(BaseModel):
 
 # --- dispositivos ---
 
+SEGUNDOS_EN_LINEA = 90
+
+
+def en_linea(fila: Fila) -> bool:
+    """Un teléfono está en línea si envió un latido en los últimos 90 segundos."""
+    latido = fila["ultimo_heartbeat"] if "ultimo_heartbeat" in fila.keys() else None
+    if not latido or fila["estado"] != "activo":
+        return False
+    momento = datetime.strptime(latido, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - momento).total_seconds() < SEGUNDOS_EN_LINEA
+
+
 class Dispositivo(BaseModel):
     id: str
     nombre: str
@@ -151,11 +166,15 @@ class Dispositivo(BaseModel):
     estado: str
     vinculado_en: str
     ultimo_acceso: str | None
+    ultima_ip: str | None = None
+    ultimo_heartbeat: str | None = None
+    en_linea: bool = False
 
     @classmethod
     def desde_fila(cls, fila: Fila) -> "Dispositivo":
         datos = {k: fila[k] for k in fila.keys() if k in cls.model_fields}
         datos["permisos"] = json.loads(fila["permisos"] or "[]")
+        datos["en_linea"] = en_linea(fila)
         return cls(**datos)
 
 
@@ -175,3 +194,5 @@ class RespuestaEmparejar(BaseModel):
     dispositivo_id: str
     token: str = Field(description="Se muestra una sola vez; el móvil debe guardarlo de forma segura.")
     permisos: list[str]
+    pc_id: str = ""
+    pc_nombre: str = ""

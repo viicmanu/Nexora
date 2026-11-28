@@ -13,7 +13,7 @@ from nexora.api_desktop_mobile.dependencias import obtener_servicios, requiere
 from nexora.api_desktop_mobile.esquemas import Archivo
 from nexora.core_ia.llm import AdaptadorConRespaldo, ErrorLLM
 from nexora.db import repositorio as repo
-from nexora.security.tokens import AJUSTES, ORGANIZAR
+from nexora.security.tokens import AJUSTES, BANDEJA, ORGANIZAR
 from nexora.servicios import Servicios
 
 router = APIRouter(prefix="/api", tags=["panel"])
@@ -72,10 +72,12 @@ class InfoAjustes(BaseModel):
     umbral_confianza: float
     raiz_organizada: str
     zonas_busqueda: list[str]
+    max_subida_mb: float
 
 
 class SolicitudUmbral(BaseModel):
-    umbral_confianza: float = Field(ge=0.5, le=1)
+    umbral_confianza: float | None = Field(default=None, ge=0.5, le=1)
+    max_subida_mb: float | None = Field(default=None, ge=1, le=4096, description="Tamaño máximo de lo que sube el teléfono.")
 
 
 class PruebaIA(BaseModel):
@@ -110,7 +112,7 @@ async def actividad(limite: int = Query(50, ge=1, le=500), s: Servicios = Depend
     ]
 
 
-@router.get("/destinations", response_model=list[Destino], dependencies=[organizar])
+@router.get("/destinations", response_model=list[Destino], dependencies=[Depends(requiere(ORGANIZAR, BANDEJA))])
 async def destinos(s: Servicios = Depends(obtener_servicios)):
     """Carpetas que el usuario ya tiene y que pueden recibir archivos."""
     catalogo = await asyncio.to_thread(s.carpetas.catalogo)
@@ -195,19 +197,23 @@ def _info(s: Servicios) -> InfoAjustes:
     return InfoAjustes(
         llm=principal.descripcion, respaldo=respaldo, umbral_confianza=s.indexador.umbral, raiz_organizada=str(s.settings.raiz_organizada),
         zonas_busqueda=[str(ruta) for _, ruta, _ in s.carpetas.zonas],
+        max_subida_mb=float(_consultar(s, repo.leer_ajuste, "max_subida_mb", "200")),
     )
 
 
 @router.get("/settings", response_model=InfoAjustes, dependencies=[organizar])
 async def ajustes(s: Servicios = Depends(obtener_servicios)):
-    return _info(s)
+    return await asyncio.to_thread(_info, s)
 
 
 @router.put("/settings", response_model=InfoAjustes, dependencies=[Depends(requiere(AJUSTES))])
 async def cambiar_ajustes(solicitud: SolicitudUmbral, s: Servicios = Depends(obtener_servicios)):
-    await asyncio.to_thread(_consultar, s, repo.guardar_ajuste, "umbral", str(solicitud.umbral_confianza))
-    s.indexador.umbral = solicitud.umbral_confianza
-    return _info(s)
+    if solicitud.umbral_confianza is not None:
+        await asyncio.to_thread(_consultar, s, repo.guardar_ajuste, "umbral", str(solicitud.umbral_confianza))
+        s.indexador.umbral = solicitud.umbral_confianza
+    if solicitud.max_subida_mb is not None:
+        await asyncio.to_thread(_consultar, s, repo.guardar_ajuste, "max_subida_mb", str(solicitud.max_subida_mb))
+    return await asyncio.to_thread(_info, s)
 
 
 @router.post("/ai/test", response_model=PruebaIA, dependencies=[organizar])

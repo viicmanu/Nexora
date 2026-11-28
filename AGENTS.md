@@ -48,3 +48,11 @@ Tailwind CSS v4 se carga con `@import 'tailwindcss';` en `src/index.css`; no hac
 
 - `backend\.venv\Scripts\python -m nexora` — arranca el backend (lee `backend/.env`).
 - `backend\.venv\Scripts\python -m pytest` — pruebas del backend (sin red).
+
+## App del teléfono (Tauri 2 mobile)
+
+- Misma base de código: `src/main.tsx` abre `src/movil/AppMovil.tsx` en Android/iOS (o en el PC con `VITE_MODO=movil` / `?movil` para probar).
+- `src/movil/conexion.ts` — HTTPS con huella fijada vía comandos Rust (`src-tauri/src/red_movil.rs`), redescubrimiento por mDNS.
+- `src/movil/almacen.ts` — cola persistente de subidas y decisiones, caché de organizados (plugin store + carpeta `cola/`).
+- Android: `JAVA_HOME` (JDK 17-21), `ANDROID_HOME`, `NDK_HOME`; `pnpm tauri android build --debug --target aarch64 --apk`. El proyecto generado está en `src-tauri/gen/android` (MainActivity mantiene el bloqueo multicast para mDNS).
+

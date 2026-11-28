@@ -37,8 +37,9 @@ class Indexador:
         self.raiz = raiz_organizada
         self.umbral = umbral_confianza
         self.max_caracteres = max_caracteres
+        self.eventos = None  # BusEventos: avisa al teléfono de nuevas dudas
 
-    async def procesar(self, ruta: Path, *, solo_proponer: bool = False) -> str | None:
+    async def procesar(self, ruta: Path, *, solo_proponer: bool = False, origen: str | None = None) -> str | None:
         """Devuelve el id del archivo indexado, o None si se ignoró. Con solo_proponer nunca se mueve: decide el usuario."""
         if not ruta.is_file():
             return None
@@ -51,8 +52,9 @@ class Indexador:
         ):
             return existente["id"]  # ya indexado y sin cambios
 
-        archivo_id = await asyncio.to_thread(self._registrar, ruta, hash_archivo, existente)
+        archivo_id = await asyncio.to_thread(self._registrar, ruta, hash_archivo, existente, origen)
         if await asyncio.to_thread(self._marcar_si_duplicado, archivo_id, ruta, hash_archivo):
+            self._avisar_duda(archivo_id, ruta.name)
             return archivo_id  # copia exacta: no hace falta consultar a la IA
         texto = await asyncio.to_thread(extraer_texto, ruta, self.max_caracteres)
         try:
@@ -68,6 +70,8 @@ class Indexador:
             log.exception("Fallo al mover o registrar %s", ruta)
             await asyncio.to_thread(self._marcar_error, archivo_id, str(exc))
             return archivo_id
+        if ruta_final == ruta and resultado.accion != "no_mover":
+            self._avisar_duda(archivo_id, ruta.name)
         documento = representacion_para_embedding(ruta.name, texto, resultado.resumen_ejecutivo, resultado.palabras_clave)
         await asyncio.to_thread(
             self.vectores.indexar_archivo, archivo_id, documento,
@@ -88,7 +92,7 @@ class Indexador:
         with self.db.conectar() as con:
             return repo.buscar_por_ruta(con, ruta)
 
-    def _registrar(self, ruta: Path, hash_archivo: str, existente: repo.Fila | None) -> str:
+    def _registrar(self, ruta: Path, hash_archivo: str, existente: repo.Fila | None, origen: str | None = None) -> str:
         with self.db.conectar() as con:
             if existente is not None:  # el contenido cambió: se vuelve a clasificar
                 repo.actualizar_archivo(
@@ -105,6 +109,7 @@ class Indexador:
                 hash_sha256=hash_archivo,
                 ruta_original=str(ruta),
                 ruta_actual=str(ruta),
+                origen_dispositivo=origen,
             )
 
     def _aplicar(self, archivo_id: str, ruta: Path, resultado: ResultadoClasificacion, solo_proponer: bool = False) -> Path:
@@ -150,6 +155,10 @@ class Indexador:
             )
         log.info("%s queda pendiente de revisión (%.0f%%)", ruta.name, resultado.confianza * 100)
         return ruta
+
+    def _avisar_duda(self, archivo_id: str, nombre: str) -> None:
+        if self.eventos:
+            self.eventos.publicar("pendiente", archivo_id=archivo_id, nombre=nombre)
 
     def _marcar_si_duplicado(self, archivo_id: str, ruta: Path, hash_archivo: str) -> bool:
         """Si es idéntico a otro archivo que sigue en el PC, lo deja en la Bandeja para que el usuario decida."""

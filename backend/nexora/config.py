@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     port: int = 8765
     cors_origenes: list[str] = ["http://localhost:1420", "http://tauri.localhost", "tauri://localhost"]
     exponer_docs: bool = True
+    # Red local para el teléfono (HTTPS con certificado propio). Solo se aceptan conexiones de redes privadas.
+    lan_habilitada: bool = True
+    host_lan: str = "0.0.0.0"
+    puerto_lan: int = 8767
+    exigir_red_privada: bool = True
+    # Donde quedan los archivos que llegan del teléfono hasta que se organizan.
+    carpeta_recibidos: Path = Field(default_factory=lambda: Path.home() / "Nexora recibidos")
 
     # Almacenamiento local (SQLite, ChromaDB y token del escritorio).
     dir_datos: Path = Field(default_factory=_dir_datos_por_defecto)

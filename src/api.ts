@@ -17,6 +17,7 @@ export interface Archivo {
   estado: Estado
   existe_en_disco: boolean
   actualizado_en: string
+  origen_dispositivo?: string | null
 }
 export interface Evento extends Archivo { error: string | null; origen: 'ia' | 'usuario' | null; se_puede_deshacer: boolean }
 export interface Pendiente {
@@ -72,9 +73,26 @@ export interface EstadoOrganizar {
   resueltos: Archivo[]
   error: string
 }
+export interface Dispositivo {
+  id: string
+  nombre: string
+  tipo: string
+  plataforma: string | null
+  estado: string
+  vinculado_en: string
+  ultimo_acceso: string | null
+  ultima_ip: string | null
+  en_linea: boolean
+}
+export interface EstadoTelefono {
+  telefono: Dispositivo | null
+  red: { lan: boolean; redes: { ip: string; privada: boolean }[]; puerto: number; huella: string | null }
+  max_subida_mb: number
+  app_movil: { codigo: number; fecha: string; tamano: number } | null
+}
 export interface Destino { valor: string; etiqueta: string }
 export interface Carpeta { id: string; ruta: string; recursiva: boolean; existe: boolean }
-export interface Ajustes { llm: string; respaldo: string | null; umbral_confianza: number; raiz_organizada: string; zonas_busqueda: string[] }
+export interface Ajustes { llm: string; respaldo: string | null; umbral_confianza: number; raiz_organizada: string; zonas_busqueda: string[]; max_subida_mb: number }
 export interface PruebaIA { modelo: string; carpeta: string; confianza: number; resumen: string; segundos: number }
 
 export class MotorApagado extends Error {}
@@ -146,6 +164,13 @@ export const api = {
   siguienteOrganizar: () => pedir<EstadoOrganizar>('/organize/next', { method: 'POST' }),
   aprobarOrganizar: (aprobados: Record<string, string>) => pedir<EstadoOrganizar>('/organize/approve', json('POST', { aprobados })),
   cancelarOrganizar: () => pedir<void>('/organize', { method: 'DELETE' }),
+  telefono: () => pedir<EstadoTelefono>('/devices/phone'),
+  fallosTelefono: () => pedir<{ archivo: string; recibido: string; tipo: string; primera_linea: string }[]>('/devices/crashes'),
+  verFallo: (archivo: string) => pedir<{ texto: string }>(`/devices/crashes/${encodeURIComponent(archivo)}`),
+  codigoVinculacion: (reemplazar = false) => pedir<{ expira_en: string; contenido_qr: string }>(`/devices/pairing-code?reemplazar=${reemplazar}`, { method: 'POST' }),
+  renombrarDispositivo: (id: string, nombre: string) => pedir<Dispositivo>(`/devices/${id}`, json('PATCH', { nombre })),
+  desvincular: (id: string) => pedir<void>(`/devices/${id}`, { method: 'DELETE' }),
+  guardarMaxSubida: (max_subida_mb: number) => pedir<Ajustes>('/settings', json('PUT', { max_subida_mb })),
   reintentar: (id: string) => pedir<unknown>(`/files/${id}/retry`, { method: 'POST' }),
   importar: (rutas: string[]) => pedir<{ aceptados: string[]; omitidos: string[] }>('/files/import', json('POST', { rutas })),
   buscar: (q: string) => pedir<{ resultados: { archivo: Archivo }[] }>(`/files/search?limite=20&q=${encodeURIComponent(q)}`),
@@ -155,6 +180,44 @@ export const api = {
   guardarUmbral: (umbral_confianza: number) => pedir<Ajustes>('/settings', json('PUT', { umbral_confianza })),
   guardarTema: (modo: 'claro' | 'oscuro' | 'auto') => pedir<unknown>('/settings/theme', json('PUT', { modo })),
   probarIA: () => pedir<PruebaIA>('/ai/test', { method: 'POST' }),
+}
+
+/** Eventos en tiempo real del motor (SSE). Se reconecta solo; devuelve la función para dejar de escuchar. */
+export function escucharEventos(alRecibir: (evento: Record<string, unknown>) => void): () => void {
+  const control = new AbortController()
+  const conectar = async () => {
+    while (!control.signal.aborted) {
+      try {
+        const respuesta = await fetch(`${BASE}/api/devices/events`, {
+          headers: { Authorization: `Bearer ${await obtenerToken()}` }, signal: control.signal,
+        })
+        const lector = respuesta.body!.pipeThrough(new TextDecoderStream()).getReader()
+        let resto = ''
+        for (;;) {
+          const { value, done } = await lector.read()
+          if (done) break
+          resto += value
+          const bloques = resto.split('\n\n')
+          resto = bloques.pop() ?? ''
+          for (const b of bloques) {
+            const datos = b.split('\n').find((l) => l.startsWith('data:'))
+            if (datos) alRecibir(JSON.parse(datos.slice(5)))
+          }
+        }
+      } catch { /* motor apagado o reconectando */ }
+      if (!control.signal.aborted) await new Promise((r) => setTimeout(r, 5000))
+    }
+  }
+  void conectar()
+  return () => control.abort()
+}
+
+export async function permitirFirewall(puerto: number): Promise<void> {
+  if (isTauri()) await invoke('permitir_firewall', { puerto })
+}
+
+export async function abrirAjustesWifi(): Promise<void> {
+  if (isTauri()) await invoke('abrir_ajustes_wifi')
 }
 
 export async function encenderMotor(): Promise<void> {

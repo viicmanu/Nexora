@@ -23,6 +23,23 @@ class Database:
                 con.execute("ALTER TABLE feedback_aprendizaje ADD COLUMN motivo TEXT")
             if "duplicado_de" not in {c["name"] for c in con.execute("PRAGMA table_info(archivos_indexados)")}:
                 con.execute("ALTER TABLE archivos_indexados ADD COLUMN duplicado_de TEXT")  # id del archivo original
+            if "origen_dispositivo" not in {c["name"] for c in con.execute("PRAGMA table_info(archivos_indexados)")}:
+                con.execute("ALTER TABLE archivos_indexados ADD COLUMN origen_dispositivo TEXT")  # "móvil: <nombre>"
+            if "ultimo_heartbeat" not in {c["name"] for c in con.execute("PRAGMA table_info(dispositivos_vinculados)")}:
+                con.execute("ALTER TABLE dispositivos_vinculados ADD COLUMN ultimo_heartbeat TEXT")
+            # Vinculación 1 a 1: como mucho un teléfono activo. Si una base antigua tiene varios, se conserva el último.
+            con.execute(
+                """
+                UPDATE dispositivos_vinculados SET estado = 'revocado', revocado_en = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE tipo = 'movil' AND estado = 'activo' AND id <> (
+                    SELECT id FROM dispositivos_vinculados WHERE tipo = 'movil' AND estado = 'activo'
+                    ORDER BY vinculado_en DESC LIMIT 1)
+                """
+            )
+            con.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_un_telefono_activo ON dispositivos_vinculados (tipo) "
+                "WHERE tipo = 'movil' AND estado = 'activo'"
+            )
 
     @contextmanager
     def conectar(self) -> Iterator[sqlite3.Connection]:

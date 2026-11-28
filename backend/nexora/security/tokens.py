@@ -22,11 +22,16 @@ EXPLICAR = "files:explain"         # POST /api/files/{id}/explain (lee el conten
 ORGANIZAR = "files:organize"       # bandeja de dudas y feedback (mueve archivos)
 AJUSTES = "settings:write"
 DISPOSITIVOS = "devices:manage"    # generar códigos QR, revocar móviles
+SUBIR = "files:upload"             # enviar archivos del teléfono al PC
+DESCARGAR = "files:download"       # bajar al teléfono archivos del índice
+LISTAR = "files:list"              # ver lo organizado
+BANDEJA = "inbox:review"           # resolver la Bandeja de Dudas desde el teléfono
+VER_DISPOSITIVOS = "devices:read"  # estado del PC vinculado y eventos
 TODOS = "*"
 
 PERMISOS_ESCRITORIO = [TODOS]
-# Fase 2: un móvil emparejado solo puede consultar; no mueve archivos ni gestiona dispositivos.
-PERMISOS_MOVIL = [BUSCAR, EXPLICAR]
+# El teléfono consulta, sube, descarga y resuelve dudas; no gestiona carpetas, ajustes ni dispositivos.
+PERMISOS_MOVIL = [BUSCAR, EXPLICAR, SUBIR, DESCARGAR, LISTAR, BANDEJA, VER_DISPOSITIVOS]
 
 
 def generar_token() -> str:
@@ -37,9 +42,9 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def tiene_permiso(permisos_json: str, permiso: str) -> bool:
+def tiene_permiso(permisos_json: str, *permisos_validos: str) -> bool:
     permisos = json.loads(permisos_json or "[]")
-    return TODOS in permisos or permiso in permisos
+    return TODOS in permisos or any(p in permisos for p in permisos_validos)
 
 
 def asegurar_token_escritorio(db: Database, ruta_token: Path) -> str:

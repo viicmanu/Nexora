@@ -128,6 +128,24 @@ CREATE TABLE IF NOT EXISTS carpetas_vigiladas (
     creado_en  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Archivos que llegan desde el teléfono, por fragmentos y reanudables.
+CREATE TABLE IF NOT EXISTS subidas (
+    id               TEXT PRIMARY KEY,
+    dispositivo_id   TEXT NOT NULL REFERENCES dispositivos_vinculados (id) ON DELETE CASCADE,
+    cliente_id       TEXT NOT NULL,              -- id del elemento en la cola del teléfono: reenviar no duplica
+    nombre           TEXT NOT NULL,
+    tamano           INTEGER NOT NULL,
+    hash_sha256      TEXT NOT NULL,
+    estado           TEXT NOT NULL DEFAULT 'recibiendo'
+                     CHECK (estado IN ('recibiendo', 'recibida', 'organizada', 'error', 'cancelada')),
+    bytes_recibidos  INTEGER NOT NULL DEFAULT 0,
+    archivo_id       TEXT REFERENCES archivos_indexados (id) ON DELETE SET NULL,
+    error            TEXT,
+    creado_en        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    actualizado_en   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (dispositivo_id, cliente_id)
+);
+
 -- Movimientos hechos por Nexora (para poder deshacerlos).
 CREATE TABLE IF NOT EXISTS movimientos (
     id                  TEXT PRIMARY KEY,

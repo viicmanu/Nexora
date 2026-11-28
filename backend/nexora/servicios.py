@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from nexora.config import Settings
+from nexora.eventos import BusEventos
 from nexora.core_ia.aprendizaje import ServicioAprendizaje
 from nexora.core_ia.busqueda import BuscadorHibrido
 from nexora.core_ia.catalogo import BuscadorCarpetas
@@ -58,6 +59,7 @@ class Servicios:
     carpetas: BuscadorCarpetas
     correcciones: InterpreteCorrecciones
     deshacer: ServicioDeshacer
+    eventos: BusEventos
     organizador: Organizador
     aprendizaje: ServicioAprendizaje
     vigilante: VigilanteCarpetas
@@ -87,6 +89,8 @@ def construir_servicios(
         db, vectores, clasificador, settings.raiz_organizada, umbral, settings.max_caracteres_clasificacion
     )
     buscador = BuscadorHibrido(db, vectores)
+    eventos = BusEventos()
+    indexador.eventos = eventos
     aprendizaje = ServicioAprendizaje(db, vectores, settings.raiz_organizada)
     _ensenar_anteriores(db, vectores)
     return Servicios(
@@ -99,6 +103,7 @@ def construir_servicios(
         buscador=buscador,
         correcciones=InterpreteCorrecciones(db, buscador, clasificador),
         deshacer=ServicioDeshacer(db, vectores),
+        eventos=eventos,
         organizador=Organizador(db, indexador, aprendizaje, settings.raiz_organizada),
         carpetas=buscador_carpetas,
         explicador=Explicador(db, llm, settings.max_caracteres_explicacion),

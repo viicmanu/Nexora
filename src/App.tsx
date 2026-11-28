@@ -5,6 +5,7 @@ import {
 } from './api'
 import { Indicaciones, NuevaIndicacion } from './Indicaciones'
 import { Organizar } from './Organizar'
+import { TelefonoVinculado } from './Telefono'
 import logo from './assets/logo.png'
 
 type Theme = 'light' | 'dark' | 'system'
@@ -329,7 +330,7 @@ function Historial({ eventos, destinos, avisar, refrescar, deshacer }: { eventos
               <div className="file-icon"><span>{tipoDe(a.nombre)}</span></div>
               <div>
                 <strong>{a.nombre}</strong>
-                <p>{a.estado === 'clasificado' && !a.carpeta ? 'Se dejó en su sitio' : etiquetas[a.estado]}{a.carpeta && (a.estado === 'clasificado' || a.estado === 'corregido') && ` · ${nombrar(a.carpeta, destinos)}`} · {haceCuanto(a.actualizado_en)}</p>
+                <p>{a.origen_dispositivo && <span className="origen">📱 {a.origen_dispositivo.replace(/^móvil: /, 'Desde ')}</span>}{a.estado === 'clasificado' && !a.carpeta ? 'Se dejó en su sitio' : etiquetas[a.estado]}{a.carpeta && (a.estado === 'clasificado' || a.estado === 'corregido') && ` · ${nombrar(a.carpeta, destinos)}`} · {haceCuanto(a.actualizado_en)}</p>
                 <p className="ruta">{a.ruta_actual}{!a.existe_en_disco && ' (ya no está ahí)'}</p>
                 {a.error && <p className="aviso-error">{a.error}</p>}
               </div>
@@ -402,6 +403,7 @@ function Configuracion({ nombre, setNombre, theme, cambiarTema, avisar }: { nomb
           <button className="boton principal">Guardar nombre</button>
         </form>
       </article>
+      <TelefonoVinculado avisar={avisar} />
       <article className="panel pagina">
         <h2>Apariencia</h2>
         <div className="opciones">

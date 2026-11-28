@@ -23,10 +23,11 @@ def dispositivo_actual(request: Request) -> Fila:
     return dispositivo
 
 
-def requiere(permiso: str) -> Callable[..., Fila]:
+def requiere(*permisos: str) -> Callable[..., Fila]:
+    """Basta con tener uno de los permisos indicados."""
     def comprobar(dispositivo: Fila = Depends(dispositivo_actual)) -> Fila:
-        if not tiene_permiso(dispositivo["permisos"], permiso):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Este dispositivo no tiene el permiso '{permiso}'.")
+        if not tiene_permiso(dispositivo["permisos"], *permisos):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Este dispositivo no tiene el permiso '{permisos[0]}'.")
         return dispositivo
 
     return comprobar
